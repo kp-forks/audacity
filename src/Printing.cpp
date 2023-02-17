@@ -14,16 +14,13 @@
 *//*******************************************************************/
 
 
-
-#include "Printing.h"
-
 #include <wx/defs.h>
 #include <wx/dc.h>
-#include <wx/intl.h>
 #include <wx/print.h>
 #include <wx/printdlg.h>
 
 #include "AColor.h"
+#include "ProjectWindows.h"
 #include "TrackArtist.h"
 #include "ViewInfo.h"
 #include "Track.h"
@@ -34,6 +31,13 @@
 
 #include "tracks/ui/TrackView.h"
 
+#include "commands/CommandContext.h"
+#include "commands/CommandManager.h"
+#include "CommonCommandFlags.h"
+#include "Project.h"
+#include "TrackPanel.h"
+
+namespace {
 // Globals, so that we remember settings from session to session
 wxPrintData &gPrintData()
 {
@@ -47,8 +51,8 @@ class AudacityPrintout final : public wxPrintout
    AudacityPrintout(wxString title,
                     TrackList *tracks, TrackPanel &panel):
       wxPrintout(title),
-      mTracks(tracks)
-      , mPanel(panel)
+        mPanel(panel)
+      , mTracks(tracks)
    {
    }
    bool OnPrintPage(int page);
@@ -189,4 +193,40 @@ void HandlePrint(
    else {
       gPrintData() = printer.GetPrintDialogData().GetPrintData();
    }
+}
+
+void OnPageSetup(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto &window = GetProjectFrame( project );
+   HandlePageSetup(&window);
+}
+
+void OnPrint(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto name = project.GetProjectName();
+   auto &tracks = TrackList::Get( project );
+   auto &window = GetProjectFrame( project );
+   HandlePrint(&window, name, &tracks, TrackPanel::Get( project ));
+}
+
+using namespace MenuTable;
+BaseItemSharedPtr PrintingItems()
+{
+   static BaseItemSharedPtr items{
+   Section( "Print",
+      Command( wxT("PageSetup"), XXO("Pa&ge Setup..."), OnPageSetup,
+         AudioIONotBusyFlag() | TracksExistFlag() ),
+      /* i18n-hint: (verb) It's item on a menu. */
+      Command( wxT("Print"), XXO("&Print..."), OnPrint,
+         AudioIONotBusyFlag() | TracksExistFlag() )
+   ) };
+   return items;
+}
+
+AttachedItem sAttachment{ { "File", { OrderingHint::Before, "Exit" } },
+   Shared( PrintingItems() )
+};
+
 }

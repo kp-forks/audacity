@@ -31,7 +31,7 @@ endif()
 # Increment as appropriate after release of a new version, and set back
 # AUDACITY_BUILD_LEVEL to 0
 set( AUDACITY_VERSION 3 )
-set( AUDACITY_RELEASE 1 )
+set( AUDACITY_RELEASE 3 )
 set( AUDACITY_REVISION 0 )
 set( AUDACITY_MODLEVEL 0 )
 
@@ -84,16 +84,32 @@ cmake_policy( SET CMP0075 NEW )
 
 # Definitions that must happen before the project() command
 if( APPLE )
-   set( MIN_MACOS_VERSION 10.9 )
-   set( TARGET_MACOS_VERSION 10.13 )
+   # CMAKE_HOST_SYSTEM_PROCESSOR is empty before the project() command
+   execute_process(
+      COMMAND uname -m
+      OUTPUT_VARIABLE HOST_SYSTEM_PROCESSOR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+   )
+
+   set( MACOS_ARCHITECTURE "${HOST_SYSTEM_PROCESSOR}" CACHE STRING "Target architecture for macOS builds. One of x86_64/arm64" )
+
+   if( MACOS_ARCHITECTURE STREQUAL "x86_64" )
+      set( MIN_MACOS_VERSION 10.9 )
+      set( TARGET_MACOS_VERSION 10.13 )
+      set( CMAKE_OSX_ARCHITECTURES x86_64 CACHE INTERNAL "" )
+   elseif( MACOS_ARCHITECTURE STREQUAL "arm64" )
+      set( MIN_MACOS_VERSION 10.13 )
+      set( TARGET_MACOS_VERSION 10.13 )
+      set( CMAKE_OSX_ARCHITECTURES arm64 CACHE INTERNAL "" )
+   else()
+      message( FATAL_ERROR "MACOS_ARCHITECTURE must be x86_64 or arm64")
+   endif()
    # Generate schema files
    set( CMAKE_XCODE_GENERATE_SCHEME ON )
 
    # Define the OSX compatibility parameters
-   set( CMAKE_OSX_ARCHITECTURES x86_64 CACHE INTERNAL "" )
    set( CMAKE_OSX_DEPLOYMENT_TARGET ${MIN_MACOS_VERSION} CACHE INTERNAL "" )
    set( CMAKE_OSX_SYSROOT macosx CACHE INTERNAL "" )
-   set( CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "" CACHE INTERNAL "" )
 
    # This prevents a link error when building with the 10.9 or older SDKs
    set( CMAKE_XCODE_ATTRIBUTE_CLANG_LINK_OBJC_RUNTIME OFF )
@@ -107,12 +123,11 @@ endif()
 set( AUDACITY_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake-proxies/cmake-modules")
 set( CMAKE_MODULE_PATH
    ${AUDACITY_MODULE_PATH}
-   ${CMAKE_BINARY_DIR}
    ${CMAKE_MODULE_PATH}
 )
 
 set( CMAKE_PREFIX_PATH
-   ${CMAKE_BINARY_DIR}
+   "${CMAKE_BINARY_DIR}/generators"
    ${CMAKE_PREFIX_PATH}
 )
 
@@ -139,10 +154,28 @@ set( _OPT "audacity_" )
 # Our very own project
 project( Audacity )
 
+# XCode 14 no longer allows building unsigned binaries.
+# So for the XCode 14 `-` is passed as the code sign identity, which stands for
+# local signing. `--deep` is passed, because 3d party libraries are copied unsigned.
+# XCODE_VERSION is defined only after the project() command
+
+if( APPLE )
+   if (XCODE_VERSION VERSION_LESS 14)
+      set( CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "" CACHE INTERNAL "" )
+   else()
+      set( CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "-" CACHE INTERNAL "" )
+      set( CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--deep -o linker-signed --timestamp" CACHE INTERNAL "")
+   endif()
+endif()
+
 # Load our functions/macros
 include( AudacityFunctions )
 
 set_from_env(AUDACITY_ARCH_LABEL) # e.g. x86_64
+
+cmd_option( ${_OPT}bundle_gplv3
+            "Bundle GPLv3 license instead of GPLv2 with the resulting binary."
+            On)
 
 # Allow user to globally set the library preference
 cmd_option( ${_OPT}conan_enabled
@@ -154,6 +187,14 @@ cmd_option( ${_OPT}conan_allow_prebuilt_binaries
             "Allow using the compiled dependencies from the cache or remotes"
             On
 )
+
+cmd_option( ${_OPT}conan_force_build_dependencies
+            "Force Conan to rebuild the dependencies every time"
+            Off
+)
+
+set( ${_OPT}conan_download_cache ""
+            CACHE PATH "Use conan download cache located at the specified path")
 
 # Allow user to globally set the library preference
 cmd_option( ${_OPT}lib_preference
@@ -172,25 +213,27 @@ cmd_option( ${_OPT}has_networking
    "Build networking features into Audacity"
    Off)
 
-include( AudacityDependencies )
+cmd_option( ${_OPT}has_url_schemes_support
+   "Build custom URL schemes support into Audacity"
+   Off)
 
-# Pull all the modules we'll need
-include( CheckCXXCompilerFlag )
-include( CheckIncludeFile )
-include( CheckIncludeFiles )
-include( CheckLibraryExists )
-include( CheckSymbolExists )
-include( CheckTypeSize )
 include( CMakeDependentOption )
-include( CMakeDetermineASM_NASMCompiler )
-include( CMakePushCheckState )
-include( GNUInstallDirs )
-include( TestBigEndian )
 
-set_from_env(SENTRY_DSN_KEY)
-set_from_env(SENTRY_HOST)
-set_from_env(SENTRY_PROJECT)
-set_from_env(CRASH_REPORT_URL)
+cmake_dependent_option(
+   ${_OPT}has_tests
+   "Enables automated testing support"
+   On
+   "${_OPT}conan_enabled"
+   Off
+)
+
+cmake_dependent_option(
+   ${_OPT}has_audiocom_upload
+   "Enables uploading of Audacity recordings to Audio.com"
+   Off
+   "${_OPT}has_networking"
+   Off
+)
 
 cmake_dependent_option(
    ${_OPT}has_sentry_reporting
@@ -215,6 +258,39 @@ cmake_dependent_option(
    "${_OPT}has_networking"
    Off
 )
+
+option(${_OPT}has_vst3
+    "Enable support for VST3 plug-ins in Audacity"
+    On
+)
+
+# Python is used for the manual and (possibly) message catalogs
+find_package( Python3 )
+
+if( Python3_FOUND )
+   set( PYTHON "${Python3_EXECUTABLE}" )
+elseif( CMAKE_SYSTEM_NAME MATCHES "Windows" )
+   # This is an odd case now, as Conan requires Python as well
+   nuget_package( pkgdir "python3" "3.7.7" )
+   file( TO_NATIVE_PATH "${pkgdir}/tools/python.exe" PYTHON )
+endif()
+
+# Pull all the modules we'll need
+include( CheckCXXCompilerFlag )
+include( CheckIncludeFile )
+include( CheckIncludeFiles )
+include( CheckLibraryExists )
+include( CheckSymbolExists )
+include( CheckTypeSize )
+include( CMakeDetermineASM_NASMCompiler )
+include( CMakePushCheckState )
+include( GNUInstallDirs )
+include( TestBigEndian )
+
+set_from_env(SENTRY_DSN_KEY)
+set_from_env(SENTRY_HOST)
+set_from_env(SENTRY_PROJECT)
+set_from_env(CRASH_REPORT_URL)
 
 # Determine 32-bit or 64-bit target
 if( CMAKE_C_COMPILER_ID MATCHES "MSVC" AND CMAKE_VS_PLATFORM_NAME MATCHES "Win64|x64" )
@@ -317,32 +393,27 @@ if( CMAKE_GENERATOR MATCHES "Visual Studio" )
 endif()
 
 # Where the final product is stored
-set( CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin )
-
-set ( _SHARED_PROXY_BASE "shared" )
-set ( _SHARED_PROXY_BASE_PATH "${CMAKE_BINARY_DIR}/${_SHARED_PROXY_BASE}")
+set( CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR} )
 
 # Define the non-install and executable paths
 if( CMAKE_CONFIGURATION_TYPES )
    set( _DESTDIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CMAKE_CFG_INTDIR}" )
-   set( _SHARED_PROXY_PATH "${_SHARED_PROXY_BASE_PATH}/${CMAKE_CFG_INTDIR}")
 else()
    set( _DESTDIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CMAKE_BUILD_TYPE}" )
-   set( _SHARED_PROXY_PATH "${_SHARED_PROXY_BASE_PATH}/${CMAKE_BUILD_TYPE}")
 endif()
 
 set( _DEST "${_DESTDIR}" )
-set( _PREFIX "${CMAKE_INSTALL_PREFIX}" )
+set( INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}" )
 set( _LIBDIR "${CMAKE_INSTALL_LIBDIR}" )
 set( _DATADIR "${CMAKE_INSTALL_DATADIR}" )
 set( _PKGLIB "${_LIBDIR}/audacity" )
 set( _PKGDATA "${_DATADIR}/audacity/" )
 set( _MANDIR "${CMAKE_INSTALL_MANDIR}" )
-set( _MODDIR "${_DEST}/modules" )
-set( _EXEDIR "${_DEST}" )
+set( _MODDIR "${_PKGLIB}/modules" )
+set( _EXEDIR "${CMAKE_INSTALL_BINDIR}" )
 
 # Setup RPATH handling
-set( CMAKE_BUILD_RPATH "${_DEST}/${_PKGLIB}" )
+set( CMAKE_BUILD_RPATH "$ORIGIN/../${_PKGLIB}" )
 set( CMAKE_BUILD_WITH_INSTALL_RPATH FALSE )
 set( CMAKE_INSTALL_RPATH "$ORIGIN/../${_PKGLIB}" )
 set( CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE )
@@ -351,11 +422,26 @@ set( CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE )
 if( CMAKE_SYSTEM_NAME MATCHES "Darwin" )
    set( _APPDIR "Audacity.app/Contents" )
    set( _DEST "${_DESTDIR}/${_APPDIR}" )
-   set( _EXEDIR "${_DEST}/MacOS" )
-   set( _MODDIR "${_DEST}/modules" )
-   set( _PKGLIB "${_DEST}/Frameworks" )
+   set( _EXEDIR "${_APPDIR}/MacOS" )
+   set( _MODDIR "${_APPDIR}/modules" )
+   set( _PKGLIB "${_APPDIR}/Frameworks" )
 
    set( CMAKE_MACOSX_RPATH OFF )
+   set( CMAKE_INSTALL_RPATH "@loader_path/../Frameworks" )
+   set( CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
+   set( CMAKE_INSTALL_NAME_DIR "@loader_path/../Frameworks" )
+   set( CMAKE_BUILD_WITH_INSTALL_RPATH ON )
+elseif( WIN32 )
+   set( _EXEDIR "" )
+   set( _PKGLIB "" )
+   set( _MODDIR "modules" )
+endif()
+
+if( ${_OPT}has_vst3 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU" )
+   #VST3 module_linux.cpp uses c++ fs features
+   #Once compiler minimum version is upgraded to 9.1+
+   #we don't need this option any more
+   list( APPEND CMAKE_REQUIRED_LIBRARIES -lstdc++fs )
 endif()
 
 # Add the math library (if found) to the list of required libraries
@@ -403,22 +489,26 @@ elseif( CMAKE_CXX_COMPILER_ID MATCHES "MSVC" )
    if( NOT IS_64BIT )
       set( SSE_FLAG "/arch:SSE2" )
    endif()
+
+   # Windows 11 SDK has a bug in winnt.h header, which breaks RC invocation
+   # https://issueexplorer.com/issue/microsoft/Windows-Dev-Performance/98
+   # TODO: We need to check if we are building for ARM64 here
+   if( IS_64BIT )
+      set(CMAKE_RC_FLAGS "/D_AMD64_")
+   else()
+      set(CMAKE_RC_FLAGS "/D_X86_")
+   endif()
 endif()
 
 check_include_files( "float.h;stdarg.h;stdlib.h;string.h" STDC_HEADERS )
 
 check_include_file( "assert.h" HAVE_ASSERT_H )
-check_include_file( "errno.h" HAVE_ERRNO_H )
-check_include_file( "fcntl.h" HAVE_FCNTL_H )
 check_include_file( "fenv.h" HAVE_FENV_H )
 check_include_file( "inttypes.h" HAVE_INTTYPES_H )
-check_include_file( "limits.h" HAVE_LIMITS_H )
 if( CMAKE_SYSTEM_NAME MATCHES "FreeBSD" )
   check_include_file( "stdlib.h" HAVE_MALLOC_H )
-  check_include_file( "sys/endian.h" HAVE_ENDIAN_H )
 else()
   check_include_file( "malloc.h" HAVE_MALLOC_H )
-  check_include_file( "byteswap.h" HAVE_BYTESWAP_H )
 endif()
 check_include_file( "memory.h" HAVE_MEMORY_H )
 check_include_file( "stdbool.h" HAVE_STDBOOL_H )
@@ -427,60 +517,24 @@ check_include_file( "stdlib.h" HAVE_STDLIB_H )
 check_include_file( "string.h" HAVE_STRING_H )
 check_include_file( "strings.h" HAVE_STRINGS_H )
 check_include_file( "unistd.h" HAVE_UNISTD_H )
-check_include_file( "xmmintrin.h" HAVE_XMMINTRIN_H )
-check_include_file( "sys/param.h" HAVE_SYS_PARAM_H )
 check_include_file( "sys/stat.h" HAVE_SYS_STAT_H )
 check_include_file( "sys/types.h" HAVE_SYS_TYPES_H )
-check_include_file( "sys/wait.h" HAVE_SYS_WAIT_H )
 
-check_symbol_exists( bcopy "strings.h" HAVE_BCOPY )
 check_symbol_exists( fileno "stdio.h" HAVE_FILENO )
 check_symbol_exists( flock "sys/file.h" HAVE_FLOCK )
-check_symbol_exists( fork "unistd.h" HAVE_FORK )
-check_symbol_exists( fsync "unistd.h" HAVE_FSYNC )
-check_symbol_exists( ftruncate "unistd.h" HAVE_FTRUNCATE )
-check_symbol_exists( getpagesize "unistd.h" HAVE_GETPAGESIZE )
-check_symbol_exists( gettimeofday "sys/time.h" HAVE_GETTIMEOFDAY )
 check_symbol_exists( gmtime "time.h" HAVE_GMTIME )
 check_symbol_exists( gmtime_r "time.h" HAVE_GMTIME_R )
 check_symbol_exists( lrint "math.h" HAVE_LRINT )
 check_symbol_exists( lrintf "math.h" HAVE_LRINTF )
-check_symbol_exists( lround "math.h" HAVE_LROUND )
 check_symbol_exists( lstat "sys/stat.h" HAVE_LSTAT )
-check_symbol_exists( memcpy "string.h" HAVE_MEMCPY )
-check_symbol_exists( memmove "string.h" HAVE_MEMMOVE )
 check_symbol_exists( mlock "sys/mman.h" HAVE_MLOCK )
-check_symbol_exists( pipe "unistd.h" HAVE_PIPE )
 check_symbol_exists( posix_fadvise "fcntl.h" HAVE_POSIX_FADVISE )
 check_symbol_exists( posix_memalign "stdlib.h" HAVE_POSIX_MEMALIGN )
-check_symbol_exists( strchr "string.h" HAVE_STRCHR )
-check_symbol_exists( waitpid "sys/wait.h" HAVE_WAITPID )
 
-check_type_size( "int8_t" SIZEOF_INT8 LANGUAGE C )
-check_type_size( "int16_t" SIZEOF_INT16 LANGUAGE C )
-check_type_size( "uint16_t" SIZEOF_UINT16 LANGUAGE C )
-check_type_size( "u_int16_t" SIZEOF_U_INT16 LANGUAGE C )
-check_type_size( "int32_t" SIZEOF_INT32 LANGUAGE C )
-check_type_size( "uint32_t" SIZEOF_UINT32 LANGUAGE C )
-check_type_size( "u_int32_t" SIZEOF_U_INT32 LANGUAGE C )
-check_type_size( "int64_t" SIZEOF_INT64 LANGUAGE C )
 check_type_size( "short" SIZEOF_SHORT LANGUAGE C )
-check_type_size( "unsigned short" SIZEOF_UNSIGNED_SHORT LANGUAGE C )
 check_type_size( "int" SIZEOF_INT LANGUAGE C )
-check_type_size( "unsigned int" SIZEOF_UNSIGNED_INT LANGUAGE C )
 check_type_size( "long" SIZEOF_LONG LANGUAGE C )
-check_type_size( "unsigned long" SIZEOF_UNSIGNED_LONG LANGUAGE C )
-check_type_size( "long long" SIZEOF_LONG_LONG LANGUAGE C )
-check_type_size( "unsigned long long" SIZEOF_UNSIGNED_LONG_LONG LANGUAGE C )
 check_type_size( "float" SIZEOF_FLOAT LANGUAGE C )
-check_type_size( "double" SIZEOF_DOUBLE LANGUAGE C )
-check_type_size( "long double" SIZEOF_LONG_DOUBLE LANGUAGE C )
-check_type_size( "loff_t" SIZEOF_LOFF LANGUAGE C )
-check_type_size( "off_t" SIZEOF_OFF LANGUAGE C )
-check_type_size( "off64_t" SIZEOF_OFF64 LANGUAGE C )
-check_type_size( "size_t" SIZEOF_SIZE LANGUAGE C )
-check_type_size( "wchar_t" SIZEOF_WCHAR LANGUAGE C )
-check_type_size( "void*" SIZEOF_POINTER LANGUAGE C )
 
 # We'll be using it if it's available
 find_package( PkgConfig QUIET )
@@ -510,25 +564,24 @@ endif()
 set( AUDACITY_DIST_VERSION ${AUDACITY_VERSION}.${AUDACITY_RELEASE}.${AUDACITY_REVISION} )
 set( AUDACITY_INFO_VERSION ${AUDACITY_VERSION}.${AUDACITY_RELEASE}.${AUDACITY_REVISION}.${AUDACITY_MODLEVEL} )
 
-# Python is used for the manual and (possibly) message catalogs
-find_package( Python3 )
-if( Python3_FOUND )
-   set( PYTHON "${Python3_EXECUTABLE}" )
-elseif( CMAKE_SYSTEM_NAME MATCHES "Windows" )
-   # This is an odd case now, as Conan requires Python as well
-   nuget_package( pkgdir "python3" "3.7.7" )
-   file( TO_NATIVE_PATH "${pkgdir}/tools/python.exe" PYTHON )
-endif()
-
+include( AudacityDependencies )
+include( AudacityTesting )
 # define EXPERIMENTAL flags
 # Do this before consistency checks for added third-party libraries
 include( "src/Experimental.cmake" )
 
+cmd_option( ${_OPT}use_ffmpeg
+   "Use ffmpeg library [loaded, off]"
+   "loaded"
+   STRINGS "loaded" "off"
+)
+
+if( ${_OPT}use_ffmpeg )
+   set(USE_FFMPEG Yes)
+endif()
+
 # Add our children
 add_subdirectory( "cmake-proxies" )
-
-# Conan uses find_package and does not set GLOBAL flag
-resolve_conan_dependencies()
 
 # This libraries have 3d party dependencies.
 # Moreover, portmixer is only available as a part of
@@ -547,10 +600,6 @@ endif()
 
 add_subdirectory( "help" )
 
-if(${_OPT}has_crashreports)
-   add_subdirectory( "crashreports" )
-endif()
-
 add_subdirectory( "images" )
 add_subdirectory( "libraries" )
 add_subdirectory( "locale" )
@@ -558,7 +607,12 @@ add_subdirectory( "src" )
 add_subdirectory( "modules" )
 add_subdirectory( "nyquist" )
 add_subdirectory( "plug-ins" )
-add_subdirectory( "scripts" )
+
+if(${_OPT}has_crashreports)
+   add_subdirectory( "crashreports" )
+endif()
+
+add_subdirectory( "tests/journals" )
 
 # Generate config file
 if( CMAKE_SYSTEM_NAME MATCHES "Windows" )

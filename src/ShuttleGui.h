@@ -19,12 +19,13 @@
 
 #include <vector>
 #include <wx/slider.h> // to inherit
-#include "MemoryX.h"
 #include <wx/listbase.h> // for wxLIST_FORMAT_LEFT
 
 #include "Prefs.h"
 #include "WrappedType.h"
 #include "ComponentInterfaceSymbol.h"
+
+#include <optional>
 
 class ChoiceSetting;
 
@@ -175,10 +176,9 @@ struct Item {
       wxEventTypeTag<Tag> eventType,
       void (Handler::*func)(Argument&)
    ) &&
-        -> typename std::enable_if<
-            std::is_base_of<Argument, Tag>::value,
-            Item&&
-        >::type
+        -> std::enable_if_t<
+            std::is_base_of_v<Argument, Tag>,
+            Item&& >
    {
       mRootConnections.push_back({
          eventType,
@@ -383,11 +383,10 @@ public:
 
    void EndNotebookPage();
 
-   wxPanel * StartInvisiblePanel();
+   wxPanel * StartInvisiblePanel(int border = 0);
    void EndInvisiblePanel();
 
-   // SettingName is a key in Preferences.
-   void StartRadioButtonGroup( const ChoiceSetting &Setting );
+   void StartRadioButtonGroup(ChoiceSetting &Setting);
    void EndRadioButtonGroup();
 
    bool DoStep( int iStep );
@@ -447,21 +446,19 @@ public:
       const TranslatableString &Prompt,
       const BoolSetting &Setting);
 
-   virtual wxChoice *TieChoice(
-      const TranslatableString &Prompt,
-      const ChoiceSetting &choiceSetting );
+   virtual wxChoice *TieChoice(const TranslatableString &Prompt,
+      ChoiceSetting &choiceSetting);
 
    // This overload presents what is really a numerical setting as a choice among
    // commonly used values, but the choice is not necessarily exhaustive.
    // This behaves just like the previous for building dialogs, but the
    // behavior is different when the call is intercepted for purposes of
    // emitting scripting information about Preferences.
-   virtual wxChoice * TieNumberAsChoice(
-      const TranslatableString &Prompt,
-      const IntSetting &Setting,
+   virtual wxChoice * TieNumberAsChoice(const TranslatableString &Prompt,
+      IntSetting &Setting,
       const TranslatableStrings & Choices,
       const std::vector<int> * pInternalChoices = nullptr,
-      int iNoMatchSelector = 0 );
+      int iNoMatchSelector = 0);
 
    virtual wxTextCtrl * TieTextBox(
       const TranslatableString &Prompt,
@@ -572,7 +569,7 @@ private:
 
    std::vector<EnumValueSymbol> mRadioSymbols;
    wxString mRadioSettingName; /// The setting controlled by a group.
-   Optional<WrappedType> mRadioValue;  /// The wrapped value associated with the active radio button.
+   std::optional<WrappedType> mRadioValue;  /// The wrapped value associated with the active radio button.
    int mRadioCount;       /// The index of this radio item.  -1 for none.
    wxString mRadioValueString; /// Unwrapped string value.
    wxRadioButton * DoAddRadioButton(
@@ -588,7 +585,6 @@ extern void SetIfCreated( wxChoice *&Var, wxChoice * Val );
 extern void SetIfCreated( wxTextCtrl *&Var, wxTextCtrl * Val );
 extern void SetIfCreated( wxStaticText *&Var, wxStaticText * Val );
 
-class GuiWaveTrack;
 class AttachableScrollBar;
 class ViewInfo;
 
@@ -700,10 +696,9 @@ public:
       wxEventTypeTag<Tag> eventType,
       void (Handler::*func)(Argument&)
    )
-        -> typename std::enable_if<
-            std::is_base_of<Argument, Tag>::value,
-            ShuttleGui&
-        >::type
+        -> std::enable_if_t<
+            std::is_base_of_v<Argument, Tag>,
+            ShuttleGui& >
    {
       std::move( mItem ).ConnectRoot( eventType, func );
       return *this;

@@ -12,19 +12,20 @@ Paul Licameli split from TrackPanel.cpp
 #include "TimeShiftHandle.h"
 
 #include "TrackView.h"
-#include "../../AColor.h"
+#include "AColor.h"
 #include "../../HitTestResult.h"
-#include "../../ProjectAudioIO.h"
-#include "../../ProjectHistory.h"
+#include "ProjectAudioIO.h"
+#include "ProjectHistory.h"
 #include "../../ProjectSettings.h"
 #include "../../RefreshCode.h"
 #include "../../Snap.h"
-#include "../../Track.h"
+#include "../../SyncLock.h"
+#include "Track.h"
 #include "../../TrackArtist.h"
 #include "../../TrackPanelDrawingContext.h"
 #include "../../TrackPanelMouseEvent.h"
-#include "../../UndoManager.h"
-#include "../../ViewInfo.h"
+#include "UndoManager.h"
+#include "ViewInfo.h"
 #include "../../../images/Cursors.h"
 
 TimeShiftHandle::TimeShiftHandle
@@ -340,11 +341,32 @@ void ClipMoveState::Init(
       }
    }
    else {
-      // Move intervals only of the chosen channel group
-      for ( auto channel : TrackList::Channels( &capturedTrack ) ) {
-         auto &shifter = *state.shifters[channel];
-         if ( channel != &capturedTrack )
-            shifter.SelectInterval(TrackInterval{clickTime, clickTime});
+      // Move intervals only of the chosen channel group      
+
+      auto selectIntervals = [&](const TrackShifter::Intervals& intervals) {
+         for (auto channel : TrackList::Channels(&capturedTrack)) {
+            auto& shifter = *state.shifters[channel];
+            if (channel != &capturedTrack)
+            {
+               for (auto& interval : intervals)
+               {
+                  shifter.SelectInterval(interval);
+               }
+            }
+         }
+      };
+      if (capturedTrack.GetLinkType() == Track::LinkType::Aligned || 
+         capturedTrack.IsAlignedWithLeader())
+         //for aligned tracks we always match the whole clip that was
+         //positively hit tested
+         selectIntervals(state.shifters[&capturedTrack]->MovingIntervals());
+      else
+      {
+         TrackShifter::Intervals intervals;
+         intervals.emplace_back(TrackInterval { clickTime, clickTime });
+         //for not align, match clips from other channels that are 
+         //exactly at clicked time point
+         selectIntervals(intervals);
       }
    }
    
@@ -361,7 +383,7 @@ void ClipMoveState::Init(
             if (!shifter.SyncLocks())
                continue;
             auto &track = shifter.GetTrack();
-            auto group = TrackList::SyncLockGroup(&track);
+            auto group = SyncLock::Group(&track);
             if ( group.size() <= 1 )
                continue;
 
@@ -960,7 +982,7 @@ UIHandle::Result TimeShiftHandle::Release
       msg = XO("Moved clips to another track");
       consolidate = false;
       for (auto& pair : mClipMoveState.shifters)
-         pair.first->LinkConsistencyCheck();
+         pair.first->LinkConsistencyFix();
    }
    else {
       msg = ( mClipMoveState.hSlideAmount > 0
@@ -978,8 +1000,12 @@ UIHandle::Result TimeShiftHandle::Release
 
 UIHandle::Result TimeShiftHandle::Cancel(AudacityProject *pProject)
 {
-   ProjectHistory::Get( *pProject ).RollbackState();
-   return RefreshCode::RefreshAll;
+   if(mClipMoveState.initialized)
+   {
+      ProjectHistory::Get( *pProject ).RollbackState();
+      return RefreshCode::RefreshAll;
+   }
+   return RefreshCode::RefreshNone;
 }
 
 void TimeShiftHandle::Draw(

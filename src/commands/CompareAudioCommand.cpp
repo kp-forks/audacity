@@ -21,13 +21,15 @@ threshold of difference in two selected tracks
 
 #include "CompareAudioCommand.h"
 
+#include "CommandDispatch.h"
+#include "CommandManager.h"
+#include "../CommonCommandFlags.h"
 #include "LoadCommands.h"
-#include "../ViewInfo.h"
-#include "../WaveTrack.h"
+#include "ViewInfo.h"
+#include "WaveTrack.h"
 
 
 #include <float.h>
-#include <wx/intl.h>
 
 #include "../Shuttle.h"
 #include "../ShuttleGui.h"
@@ -47,10 +49,16 @@ extern void RegisterCompareAudio( Registrar & R){
 
 }
 
-bool CompareAudioCommand::DefineParams( ShuttleParams & S ){
+template<bool Const>
+bool CompareAudioCommand::VisitSettings( SettingsVisitorBase<Const> & S ){
    S.Define( errorThreshold,  wxT("Threshold"),   0.0f,  0.0f,    0.01f,    1.0f );
    return true;
 }
+bool CompareAudioCommand::VisitSettings( SettingsVisitor & S )
+   { return VisitSettings<false>(S); }
+
+bool CompareAudioCommand::VisitSettings( ConstSettingsVisitor & S )
+   { return VisitSettings<true>(S); }
 
 void CompareAudioCommand::PopulateOrExchange(ShuttleGui & S)
 {
@@ -164,3 +172,18 @@ bool CompareAudioCommand::Apply(const CommandContext & context)
    return true;
 }
 
+namespace {
+using namespace MenuTable;
+
+// Register menu items
+
+AttachedItem sAttachment{
+   wxT("Optional/Extra/Part2/Scriptables2"),
+   // Note that the PLUGIN_SYMBOL must have a space between words,
+   // whereas the short-form used here must not.
+   // (So if you did write "Compare Audio" for the PLUGIN_SYMBOL name, then
+   // you would have to use "CompareAudio" here.)
+   Command( wxT("CompareAudio"), XXO("Compare Audio..."),
+      CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag() ),
+};
+}

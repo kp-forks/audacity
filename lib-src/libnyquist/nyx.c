@@ -905,6 +905,8 @@ nyx_rval nyx_eval_expression(const char *expr_string)
 
  finish:
 
+   xlend(&nyx_cntxt);
+
    xlflush();
 
    xlpop(); // unprotect expr
@@ -1000,6 +1002,18 @@ int nyx_get_audio(nyx_audio_callback callback, void *userdata)
       // the script to exit and return to this level, then we don't need to
       // restore the previous context.
       goto finish;
+   }
+
+   if (nyx_input_length == 0) {
+      LVAL val = getvalue(xlenter("LEN"));
+      if (val != s_unbound) {
+         if (ntype(val) == FLONUM) {
+            nyx_input_length = (int64_t) getflonum(val);
+         }
+         else if (ntype(val) == FIXNUM) {
+            nyx_input_length = (int64_t) getfixnum(val);
+         }
+      }
    }
 
    // at this point, input sounds which were referenced by symbol S
@@ -1100,6 +1114,8 @@ int nyx_get_audio(nyx_audio_callback callback, void *userdata)
    // Never reached
 
  finish:
+
+   xlend(&nyx_cntxt);
 
    if (buffer) {
       free(buffer);

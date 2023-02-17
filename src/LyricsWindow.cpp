@@ -13,14 +13,16 @@
 #include "Lyrics.h"
 #include "AudioIO.h"
 #include "CommonCommandFlags.h"
+#include "LabelTrack.h"
 #include "prefs/GUISettings.h" // for RTL_WORKAROUND
 #include "Project.h"
 #include "ProjectAudioIO.h"
 #include "ProjectFileIO.h"
+#include "ProjectWindow.h"
+#include "ProjectWindows.h"
 #include "ViewInfo.h"
 
 #include <wx/app.h>
-#include <wx/radiobut.h>
 #include <wx/toolbar.h>
 #include <wx/settings.h>
 
@@ -68,12 +70,11 @@ LyricsWindow::LyricsWindow(AudacityProject *parent)
    mProject = pProject;
 
    SetWindowTitle();
-   auto titleChanged = [&](wxCommandEvent &evt)
-   {
-      SetWindowTitle();
-      evt.Skip();
-   };
-   wxTheApp->Bind( EVT_PROJECT_TITLE_CHANGE, titleChanged );
+   mTitleChangeSubscription = ProjectFileIO::Get(*parent)
+      .Subscribe([this](ProjectFileIOMessage message){
+         if (message == ProjectFileIOMessage::ProjectTitleChange)
+            SetWindowTitle();
+      });
 
    // loads either the XPM or the windows resource, depending on the platform
 #if !defined(__WXMAC__) && !defined(__WXX11__)
@@ -137,9 +138,9 @@ LyricsWindow::LyricsWindow(AudacityProject *parent)
    //}
 
    // Events from the project don't propagate directly to this other frame, so...
-   pProject->Bind(EVT_TRACK_PANEL_TIMER,
-      &LyricsWindow::OnTimer,
-      this);
+   if (pProject)
+      mTimerSubscription = ProjectWindow::Get( *pProject ).GetPlaybackScroller()
+         .Subscribe(*this, &LyricsWindow::OnTimer);
    Center();
 }
 
@@ -158,7 +159,7 @@ void LyricsWindow::OnStyle_Highlight(wxCommandEvent & WXUNUSED(event))
    mLyricsPanel->SetLyricsStyle(LyricsPanel::kHighlightLyrics);
 }
 
-void LyricsWindow::OnTimer(wxCommandEvent &event)
+void LyricsWindow::OnTimer(Observer::Message)
 {
    if (auto pProject = mProject.lock()) {
       if (ProjectAudioIO::Get( *pProject ).IsAudioActive())
@@ -173,9 +174,6 @@ void LyricsWindow::OnTimer(wxCommandEvent &event)
          GetLyricsPanel()->Update(selectedRegion.t0());
       }
    }
-
-   // Let other listeners get the notification
-   event.Skip();
 }
 
 void LyricsWindow::SetWindowTitle()
@@ -202,38 +200,28 @@ void LyricsWindow::UpdatePrefs()
 namespace {
 
 // Lyrics window attached to each project is built on demand by:
-AudacityProject::AttachedWindows::RegisteredFactory sLyricsWindowKey{
+AttachedWindows::RegisteredFactory sLyricsWindowKey{
    []( AudacityProject &parent ) -> wxWeakRef< wxWindow > {
       return safenew LyricsWindow( &parent );
    }
 };
 
 // Define our extra menu item that invokes that factory
-struct Handler : CommandHandlerObject {
-   void OnKaraoke(const CommandContext &context)
-   {
-      auto &project = context.project;
+void OnKaraoke(const CommandContext &context)
+{
+   auto &project = context.project;
 
-      auto lyricsWindow = &project.AttachedWindows::Get( sLyricsWindowKey );
-      lyricsWindow->Show();
-      lyricsWindow->Raise();
-   }
-};
-
-CommandHandlerObject &findCommandHandler(AudacityProject &) {
-   // Handler is not stateful.  Doesn't need a factory registered with
-   // AudacityProject.
-   static Handler instance;
-   return instance;
+   auto lyricsWindow = &GetAttachedWindows(project).Get(sLyricsWindowKey);
+   lyricsWindow->Show();
+   lyricsWindow->Raise();
 }
 
 // Register that menu item
 
 using namespace MenuTable;
 AttachedItem sAttachment{ wxT("View/Windows"),
-   ( FinderScope{ findCommandHandler },
-      Command( wxT("Karaoke"), XXO("&Karaoke..."), &Handler::OnKaraoke,
-         LabelTracksExistFlag() ) )
+   Command( wxT("Karaoke"), XXO("&Karaoke"), OnKaraoke,
+      LabelTracksExistFlag() )
 };
 
 }

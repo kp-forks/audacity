@@ -21,17 +21,12 @@ of sample block storage.
 #include <wx/app.h>
 #include <wx/log.h>
 #include <wx/textctrl.h>
-#include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
-#include <wx/dialog.h>
-#include <wx/sizer.h>
 #include <wx/stattext.h>
-#include <wx/timer.h>
-#include <wx/utils.h>
+#include <wx/stopwatch.h>
 #include <wx/valgen.h>
 #include <wx/valtext.h>
-#include <wx/intl.h>
 
 #include "SampleBlock.h"
 #include "ShuttleGui.h"
@@ -40,8 +35,7 @@ of sample block storage.
 #include "WaveTrack.h"
 #include "Sequence.h"
 #include "Prefs.h"
-#include "ProjectSettings.h"
-#include "ViewInfo.h"
+#include "ProjectRate.h"
 
 #include "FileNames.h"
 #include "SelectFile.h"
@@ -73,7 +67,7 @@ private:
    void FlushPrint();
 
    AudacityProject &mProject;
-   const ProjectSettings &mSettings;
+   const ProjectRate &mRate;
 
    bool      mHoldPrint;
    wxString  mToPrint;
@@ -146,7 +140,7 @@ BenchmarkDialog::BenchmarkDialog(
                 wxDEFAULT_DIALOG_STYLE |
                 wxRESIZE_BORDER)
    , mProject(project)
-   , mSettings{ ProjectSettings::Get(project) }
+   , mRate{ ProjectRate::Get(project) }
 {
    SetName();
 
@@ -354,10 +348,8 @@ void BenchmarkDialog::OnRun( wxCommandEvent & WXUNUSED(event))
       return;
    }
 
-   bool editClipCanMove = true;
-   gPrefs->Read(wxT("/GUI/EditClipCanMove"), &editClipCanMove);
-   gPrefs->Write(wxT("/GUI/EditClipCanMove"), false);
-   gPrefs->Flush();
+   SettingScope scope;
+   EditClipsCanMove.Write( false );
 
    // Remember the old blocksize, so that we can restore it later.
    auto oldBlockSize = Sequence::GetMaxDiskBlockSize();
@@ -365,8 +357,6 @@ void BenchmarkDialog::OnRun( wxCommandEvent & WXUNUSED(event))
 
    const auto cleanup = finally( [&] {
       Sequence::SetMaxDiskBlockSize(oldBlockSize);
-      gPrefs->Write(wxT("/GUI/EditClipCanMove"), editClipCanMove);
-      gPrefs->Flush();
    } );
 
    wxBusyCursor busy;
@@ -374,9 +364,9 @@ void BenchmarkDialog::OnRun( wxCommandEvent & WXUNUSED(event))
    HoldPrint(true);
 
    const auto t =
-      WaveTrackFactory{ mSettings,
+      WaveTrackFactory{ mRate,
                     SampleBlockFactory::New( mProject )  }
-         .NewWaveTrack(SampleFormat);
+         .Create(SampleFormat, mRate.GetRate());
 
    t->SetRate(1);
 
@@ -432,11 +422,11 @@ void BenchmarkDialog::OnRun( wxCommandEvent & WXUNUSED(event))
    // as we're about to do).
    t->GetEndTime();
 
-   if (t->GetClipByIndex(0)->GetSequence()->GetNumSamples() != nChunks * chunkSize) {
+   if (t->GetClipByIndex(0)->GetPlaySamplesCount() != nChunks * chunkSize) {
       Printf( XO("Expected len %lld, track len %lld.\n")
          .Format(
             nChunks * chunkSize,
-            t->GetClipByIndex(0)->GetSequence()->GetNumSamples()
+            t->GetClipByIndex(0)->GetPlaySamplesCount()
                .as_long_long() ) );
       goto fail;
    }
@@ -469,7 +459,7 @@ void BenchmarkDialog::OnRun( wxCommandEvent & WXUNUSED(event))
          Printf( XO("Expected len %lld, track len %lld.\n")
             .Format(
                nChunks * chunkSize,
-               t->GetClipByIndex(0)->GetSequence()->GetNumSamples()
+               t->GetClipByIndex(0)->GetPlaySamplesCount()
                   .as_long_long() ) );
          goto fail;
       }
@@ -489,12 +479,12 @@ void BenchmarkDialog::OnRun( wxCommandEvent & WXUNUSED(event))
          goto fail;
       }
 
-      if (t->GetClipByIndex(0)->GetSequence()->GetNumSamples() != nChunks * chunkSize) {
+      if (t->GetClipByIndex(0)->GetPlaySamplesCount() != nChunks * chunkSize) {
          Printf( XO("Trial %d\n").Format( z ) );
          Printf( XO("Expected len %lld, track len %lld.\n")
             .Format(
                nChunks * chunkSize,
-               t->GetClipByIndex(0)->GetSequence()->GetNumSamples()
+               t->GetClipByIndex(0)->GetPlaySamplesCount()
                   .as_long_long() ) );
          goto fail;
       }

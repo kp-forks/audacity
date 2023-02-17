@@ -19,9 +19,12 @@
 
 #include "SetClipCommand.h"
 
+#include "CommandDispatch.h"
+#include "CommandManager.h"
+#include "../CommonCommandFlags.h"
 #include "LoadCommands.h"
-#include "../WaveClip.h"
-#include "../WaveTrack.h"
+#include "WaveClip.h"
+#include "WaveTrack.h"
 #include "../Shuttle.h"
 #include "../ShuttleGui.h"
 
@@ -52,7 +55,8 @@ static const EnumValueSymbol kColourStrings[nColours] =
 };
 
 
-bool SetClipCommand::DefineParams( ShuttleParams & S ){ 
+template<bool Const>
+bool SetClipCommand::VisitSettings( SettingsVisitorBase<Const> & S ){
    S.OptionalY( bHasContainsTime   ).Define(     mContainsTime,   wxT("At"),         0.0, 0.0, 100000.0 );
    S.OptionalN( bHasColour         ).DefineEnum( mColour,         wxT("Color"),      kColour0, kColourStrings, nColours );
    // Allowing a negative start time is not a mistake.
@@ -60,6 +64,11 @@ bool SetClipCommand::DefineParams( ShuttleParams & S ){
    S.OptionalN( bHasT0             ).Define(     mT0,             wxT("Start"),      0.0, -5.0, 1000000.0);
    return true;
 };
+bool SetClipCommand::VisitSettings( SettingsVisitor & S )
+   { return VisitSettings<false>(S); }
+
+bool SetClipCommand::VisitSettings( ConstSettingsVisitor & S )
+   { return VisitSettings<true>(S); }
 
 void SetClipCommand::PopulateOrExchange(ShuttleGui & S)
 {
@@ -71,6 +80,7 @@ void SetClipCommand::PopulateOrExchange(ShuttleGui & S)
       S.Optional( bHasColour      ).TieChoice(          XXO("Color:"),         mColour,
          Msgids( kColourStrings, nColours ) );
       S.Optional( bHasT0          ).TieNumericTextBox(  XXO("Start:"),         mT0 );
+      S.Optional( bHasName        ).TieTextBox(         XXO("Name:"),          mName );
    }
    S.EndMultiColumn();
 }
@@ -84,8 +94,8 @@ bool SetClipCommand::ApplyInner( const CommandContext &, Track * t )
          WaveClip * pClip = *it;
          bool bFound =
             !bHasContainsTime || (
-               ( pClip->GetStartTime() <= mContainsTime ) &&
-               ( pClip->GetEndTime() >= mContainsTime )
+               ( pClip->GetPlayStartTime() <= mContainsTime ) &&
+               ( pClip->GetPlayEndTime() >= mContainsTime )
             );
          if( bFound )
          {
@@ -95,11 +105,29 @@ bool SetClipCommand::ApplyInner( const CommandContext &, Track * t )
                pClip->SetColourIndex(mColour);
             // No validation of overlap yet.  We assume the user is sensible!
             if( bHasT0 )
-               pClip->SetOffset(mT0);
+               pClip->SetPlayStartTime(mT0);
             // \todo Use SetClip to move a clip between tracks too.
+            if( bHasName )
+               pClip->SetName(mName);
 
          }
       }
    } );
    return true;
+}
+
+namespace {
+using namespace MenuTable;
+
+// Register menu items
+
+AttachedItem sAttachment1{
+   wxT("Optional/Extra/Part2/Scriptables1"),
+   // Note that the PLUGIN_SYMBOL must have a space between words,
+   // whereas the short-form used here must not.
+   // (So if you did write "Compare Audio" for the PLUGIN_SYMBOL name, then
+   // you would have to use "CompareAudio" here.)
+   Command( wxT("SetClip"), XXO("Set Clip..."),
+      CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag() )
+};
 }

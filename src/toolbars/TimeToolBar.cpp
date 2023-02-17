@@ -19,7 +19,6 @@
 #include <wx/setup.h> // for wxUSE_* macros
 
 #ifndef WX_PRECOMP
-#include <wx/intl.h>
 #include <wx/sizer.h>
 #endif
 
@@ -27,11 +26,12 @@
 #include "SelectionBarListener.h"
 #include "ToolManager.h"
 
-#include "../AudioIO.h"
-#include "../Project.h"
-#include "../ProjectAudioIO.h"
+#include "AudioIO.h"
+#include "Project.h"
+#include "ProjectAudioIO.h"
+#include "ProjectRate.h"
 #include "../ProjectSettings.h"
-#include "../ViewInfo.h"
+#include "ViewInfo.h"
 
 IMPLEMENT_CLASS(TimeToolBar, ToolBar);
 
@@ -48,22 +48,33 @@ BEGIN_EVENT_TABLE(TimeToolBar, ToolBar)
    EVT_IDLE(TimeToolBar::OnIdle)
 END_EVENT_TABLE()
 
+Identifier TimeToolBar::ID()
+{
+   return wxT("Time");
+}
+
 TimeToolBar::TimeToolBar(AudacityProject &project)
-:  ToolBar(project, TimeBarID, XO("Time"), wxT("Time"), true),
+:  ToolBar(project, XO("Time"), ID(), true),
    mListener(NULL),
    mAudioTime(NULL)
 {
-   project.Bind(EVT_PROJECT_SETTINGS_CHANGE, &TimeToolBar::OnSettingsChanged, this);
+   mSubscription =
+      ProjectRate::Get(project).Subscribe(*this, &TimeToolBar::OnRateChanged);
 }
 
 TimeToolBar::~TimeToolBar()
 {
 }
 
+ToolBar::DockID TimeToolBar::DefaultDockID() const
+{
+   return BotDockID;
+}
+
 TimeToolBar &TimeToolBar::Get(AudacityProject &project)
 {
    auto &toolManager = ToolManager::Get(project);
-   return *static_cast<TimeToolBar*>(toolManager.GetToolBar(TimeBarID));
+   return *static_cast<TimeToolBar*>(toolManager.GetToolBar(ID()));
 }
 
 const TimeToolBar &TimeToolBar::Get(const AudacityProject &project)
@@ -76,7 +87,7 @@ void TimeToolBar::Populate()
    const auto &settings = ProjectSettings::Get(mProject);
 
    // Get the default sample rate
-   auto rate = settings.GetRate();
+   auto rate = ProjectRate::Get(mProject).GetRate();
 
    // Get the default time format
    auto format = settings.GetAudioTimeFormat();
@@ -261,16 +272,11 @@ void TimeToolBar::SetResizingLimits()
    SetMaxSize(maxSize);
 }
 
-// Called when the project settings change
-void TimeToolBar::OnSettingsChanged(wxCommandEvent &evt)
+// Called when the project rate changes
+void TimeToolBar::OnRateChanged(double rate)
 {
-   evt.Skip(false);
-
-   if (evt.GetInt() == ProjectSettings::ChangedProjectRate && mAudioTime)
-   {
-      const auto &settings = ProjectSettings::Get(mProject);
-      mAudioTime->SetSampleRate(settings.GetRate());
-   }
+   if (mAudioTime)
+      mAudioTime->SetSampleRate(rate);
 }
 
 // Called when the format drop downs is changed.
@@ -373,9 +379,7 @@ void TimeToolBar::OnIdle(wxIdleEvent &evt)
    mAudioTime->SetValue(wxMax(0.0, audioTime));
 }
 
-static RegisteredToolbarFactory factory
-{
-   TimeBarID,
+static RegisteredToolbarFactory factory{
    []( AudacityProject &project )
    {
       return ToolBar::Holder{ safenew TimeToolBar{ project } };
@@ -385,7 +389,7 @@ static RegisteredToolbarFactory factory
 namespace {
 AttachedToolBarMenuItem sAttachment
 {
-   TimeBarID,
+   TimeToolBar::ID(),
    wxT("ShowTimeTB"),
    /* i18n-hint: Clicking this menu item shows the toolbar
       for viewing actual time of the cursor */

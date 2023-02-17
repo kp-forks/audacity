@@ -11,11 +11,8 @@
 #ifndef __AUDACITY_NOTETRACK__
 #define __AUDACITY_NOTETRACK__
 
-
-
-
-
 #include <utility>
+#include "Prefs.h"
 #include "Track.h"
 
 #if defined(USE_MIDI)
@@ -65,7 +62,12 @@ class AUDACITY_DLL_API NoteTrack final
    : public NoteTrackBase
 {
 public:
+   // Construct and also build all attachments
+   static NoteTrack *New(AudacityProject &project);
+
    NoteTrack();
+   //! Copy construction hasn't been necessary yet
+   NoteTrack(const NoteTrack &orig, ProtectedCreationArg &&) = delete;
    virtual ~NoteTrack();
 
    using Holder = std::shared_ptr<NoteTrack>;
@@ -107,7 +109,8 @@ public:
    bool Shift(double t) /* not override */;
 
 #ifdef EXPERIMENTAL_MIDI_OUT
-   float GetVelocity() const { return mVelocity; }
+   float GetVelocity() const {
+      return mVelocity.load(std::memory_order_relaxed); }
    void SetVelocity(float velocity);
 #endif
 
@@ -153,8 +156,8 @@ public:
    void VScroll(int start, int end);
 #endif
 
-   bool HandleXMLTag(const wxChar *tag, const wxChar **attrs) override;
-   XMLTagHandler *HandleXMLChild(const wxChar *tag) override;
+   bool HandleXMLTag(const std::string_view& tag, const AttributesList& attrs) override;
+   XMLTagHandler *HandleXMLChild(const std::string_view& tag) override;
    void WriteXML(XMLWriter &xmlFile) const override;
 
    // channels are numbered as integers 0-15, visible channels
@@ -170,20 +173,34 @@ public:
    // Bitmask with all NUM_CHANNELS bits set
 #define ALL_CHANNELS (1 << NUM_CHANNELS) - 1
 #define CHANNEL_BIT(c) (1 << (c % NUM_CHANNELS))
-   bool IsVisibleChan(int c) const {
-      return (mVisibleChannels & CHANNEL_BIT(c)) != 0;
+   unsigned GetVisibleChannels() const {
+      return mVisibleChannels.load(std::memory_order_relaxed);
    }
-   void SetVisibleChan(int c) { mVisibleChannels |= CHANNEL_BIT(c); }
-   void ClearVisibleChan(int c) { mVisibleChannels &= ~CHANNEL_BIT(c); }
-   void ToggleVisibleChan(int c) { mVisibleChannels ^= CHANNEL_BIT(c); }
+   void SetVisibleChannels(unsigned value) {
+      mVisibleChannels.store(value, std::memory_order_relaxed);
+   }
+   bool IsVisibleChan(int c) const {
+      return (GetVisibleChannels() & CHANNEL_BIT(c)) != 0;
+   }
+   void SetVisibleChan(int c) {
+      mVisibleChannels.fetch_or(CHANNEL_BIT(c), std::memory_order_relaxed); }
+   void ClearVisibleChan(int c) {
+      mVisibleChannels.fetch_and(~CHANNEL_BIT(c), std::memory_order_relaxed); }
+   void ToggleVisibleChan(int c) {
+      mVisibleChannels.fetch_xor(CHANNEL_BIT(c), std::memory_order_relaxed); }
    // Solos the given channel.  If it's the only channel visible, all channels
    // are enabled; otherwise, it is set to the only visible channel.
    void SoloVisibleChan(int c) {
-      if (mVisibleChannels == CHANNEL_BIT(c))
-         mVisibleChannels = ALL_CHANNELS;
+      auto visibleChannels = 0u;
+      if (GetVisibleChannels() == CHANNEL_BIT(c))
+         visibleChannels = ALL_CHANNELS;
       else
-         mVisibleChannels = CHANNEL_BIT(c);
+         visibleChannels = CHANNEL_BIT(c);
+      mVisibleChannels.store(visibleChannels, std::memory_order_relaxed);
    }
+
+   const TypeInfo &GetTypeInfo() const override;
+   static const TypeInfo &ClassTypeInfo();
 
    Track::Holder PasteInto( AudacityProject & ) const override;
 
@@ -191,8 +208,9 @@ public:
    Intervals GetIntervals() override;
 
  private:
-
-   TrackKind GetKind() const override { return TrackKind::Note; }
+#ifdef EXPERIMENTAL_MIDI_OUT
+   void DoSetVelocity(float velocity);
+#endif
 
    void AddToDuration( double delta );
 
@@ -205,7 +223,8 @@ public:
    mutable long mSerializationLength;
 
 #ifdef EXPERIMENTAL_MIDI_OUT
-   float mVelocity; // velocity offset
+   //! Atomic because it may be read by worker threads in playback
+   std::atomic<float> mVelocity{ 0.0f }; // velocity offset
 #endif
 
    int mBottomNote, mTopNote;
@@ -221,7 +240,8 @@ public:
    enum { MinPitch = 0, MaxPitch = 127 };
    static const float ZoomStep;
 
-   int mVisibleChannels; // bit set of visible channels
+   //! A bit set; atomic because it may be read by worker threads in playback
+   std::atomic<unsigned> mVisibleChannels{ ALL_CHANNELS };
 
    std::weak_ptr<StretchHandle> mStretchHandle;
 };
@@ -269,6 +289,13 @@ public:
    // of the line separating B and C
    int GetWhitePos(int i) const { return 1 + (i * GetOctaveHeight()) / 7; }
 };
+
+extern AUDACITY_DLL_API StringSetting MIDIPlaybackDevice;
+extern AUDACITY_DLL_API StringSetting MIDIRecordingDevice;
+extern AUDACITY_DLL_API IntSetting MIDISynthLatency_ms;
+
+ENUMERATE_TRACK_TYPE(NoteTrack);
+
 #endif // USE_MIDI
 
 #ifndef SONIFY
@@ -291,5 +318,7 @@ public:
 #define SonifyEndModifyState()
 #endif
 
+
+AUDACITY_DLL_API wxString GetMIDIDeviceInfo();
 
 #endif

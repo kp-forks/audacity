@@ -17,14 +17,17 @@
 
 #include "ImportExportCommands.h"
 
+#include "CommandDispatch.h"
+#include "CommandManager.h"
+#include "../CommonCommandFlags.h"
 #include "LoadCommands.h"
 #include "../ProjectFileManager.h"
-#include "../ViewInfo.h"
+#include "ViewInfo.h"
 #include "../export/Export.h"
 #include "../SelectUtilities.h"
 #include "../Shuttle.h"
 #include "../ShuttleGui.h"
-#include "../Track.h"
+#include "Track.h"
 #include "wxFileNameWrapper.h"
 #include "CommandContext.h"
 
@@ -33,10 +36,17 @@ const ComponentInterfaceSymbol ImportCommand::Symbol
 
 namespace{ BuiltinCommandsModule::Registration< ImportCommand > reg; }
 
-bool ImportCommand::DefineParams( ShuttleParams & S ){
-   S.Define( mFileName, wxT("Filename"),  "" );
+template<bool Const>
+bool ImportCommand::VisitSettings( SettingsVisitorBase<Const> & S ){
+   S.Define( mFileName, wxT("Filename"), wxString{} );
    return true;
 }
+
+bool ImportCommand::VisitSettings( SettingsVisitor & S )
+   { return VisitSettings<false>(S); }
+
+bool ImportCommand::VisitSettings( ConstSettingsVisitor & S )
+   { return VisitSettings<true>(S); }
 
 void ImportCommand::PopulateOrExchange(ShuttleGui & S)
 {
@@ -63,15 +73,20 @@ bool ImportCommand::Apply(const CommandContext & context)
    return success;
 }
 
-
-
-bool ExportCommand::DefineParams( ShuttleParams & S ){
+template<bool Const>
+bool ExportCommand::VisitSettings( SettingsVisitorBase<Const> & S ){
    wxFileName fn = FileNames::FindDefaultPath(FileNames::Operation::Export);
    fn.SetName("exported.wav");
    S.Define(mFileName, wxT("Filename"), fn.GetFullPath());
    S.Define( mnChannels, wxT("NumChannels"),  1 );
    return true;
 }
+
+bool ExportCommand::VisitSettings( SettingsVisitor & S )
+   { return VisitSettings<false>(S); }
+
+bool ExportCommand::VisitSettings( ConstSettingsVisitor & S )
+   { return VisitSettings<true>(S); }
 
 const ComponentInterfaceSymbol ExportCommand::Symbol
 { XO("Export2") };
@@ -123,3 +138,22 @@ bool ExportCommand::Apply(const CommandContext & context)
    return false;
 }
 
+namespace {
+using namespace MenuTable;
+
+// Register menu items
+
+AttachedItem sAttachment{
+   wxT("Optional/Extra/Part2/Scriptables2"),
+   Items( wxT(""),
+      // Note that the PLUGIN_SYMBOL must have a space between words,
+      // whereas the short-form used here must not.
+      // (So if you did write "Compare Audio" for the PLUGIN_SYMBOL name, then
+      // you would have to use "CompareAudio" here.)
+      Command( wxT("Import2"), XXO("Import..."),
+         CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag() ),
+      Command( wxT("Export2"), XXO("Export..."),
+         CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag() )
+   )
+};
+}

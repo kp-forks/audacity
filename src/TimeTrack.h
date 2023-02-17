@@ -25,6 +25,11 @@ class AUDACITY_DLL_API TimeTrack final : public Track {
 
  public:
 
+   static wxString GetDefaultName();
+
+   // Construct and also build all attachments
+   static TimeTrack *New(AudacityProject &project);
+
    explicit TimeTrack(const ZoomInfo *zoomInfo);
    /** @brief Copy-Constructor - create a NEW TimeTrack:: which is an independent copy of the original
     *
@@ -35,10 +40,13 @@ class AUDACITY_DLL_API TimeTrack final : public Track {
     * @param pT0 if not null, then the start of the sub-range to copy
     * @param pT1 if not null, then the end of the sub-range to copy
     */
-   TimeTrack(const TimeTrack &orig, double *pT0 = nullptr, double *pT1 = nullptr);
+   TimeTrack(const TimeTrack &orig, ProtectedCreationArg&&,
+      double *pT0 = nullptr, double *pT1 = nullptr);
 
    virtual ~TimeTrack();
 
+   const TypeInfo &GetTypeInfo() const override;
+   static const TypeInfo &ClassTypeInfo();
 
    bool SupportsBasicEditing() const override;
 
@@ -61,9 +69,9 @@ class AUDACITY_DLL_API TimeTrack final : public Track {
 
    // XMLTagHandler callback methods for loading and saving
 
-   bool HandleXMLTag(const wxChar *tag, const wxChar **attrs) override;
-   void HandleXMLEndTag(const wxChar *tag) override;
-   XMLTagHandler *HandleXMLChild(const wxChar *tag) override;
+   bool HandleXMLTag(const std::string_view& tag, const AttributesList& attrs) override;
+   void HandleXMLEndTag(const std::string_view& tag) override;
+   XMLTagHandler *HandleXMLChild(const std::string_view& tag) override;
    void WriteXML(XMLWriter &xmlFile) const override;
 
    // Lock and unlock the track: you must lock the track before
@@ -97,9 +105,6 @@ class AUDACITY_DLL_API TimeTrack final : public Track {
  private:
    void CleanState();
 
-   // Identifying the type of track
-   TrackKind GetKind() const override { return TrackKind::Time; }
-
    const ZoomInfo  *const mZoomInfo;
    std::unique_ptr<BoundedEnvelope> mEnvelope;
    std::unique_ptr<Ruler> mRuler;
@@ -118,6 +123,8 @@ class AUDACITY_DLL_API TimeTrack final : public Track {
 private:
    Track::Holder Clone() const override;
 };
+
+ENUMERATE_TRACK_TYPE(TimeTrack);
 
 
 #endif // __AUDACITY_TIMETRACK__

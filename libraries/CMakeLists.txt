@@ -13,12 +13,43 @@ set( LIBRARIES
    lib-preferences
    lib-math
    lib-files
+   lib-ipc
    lib-registries
    lib-xml
+   lib-audio-devices
+   lib-project
+   lib-screen-geometry
+   lib-project-rate
+   lib-ffmpeg-support
+   lib-theme
+   image-compiler # not a library, but has a place in their dependency graph
+   lib-theme-resources
+   lib-track
+   lib-transactions
+   lib-sample-track
+   lib-module-manager
+   lib-project-history
+   lib-graphics
+   lib-audio-graph
+   lib-tags
+   lib-realtime-effects
+   lib-audio-io
+   lib-wave-track
 )
 
 if ( ${_OPT}has_networking )
    list( APPEND LIBRARIES lib-network-manager)
+endif()
+
+if ( ${_OPT}has_url_schemes_support )
+   list( APPEND LIBRARIES lib-url-schemes)
+endif()
+
+if ( ${_OPT}has_audiocom_upload)
+   list( APPEND LIBRARIES
+      lib-cloud-upload
+      lib-cloud-audiocom
+   )
 endif()
 
 # This library depends on lib-network-manager
@@ -31,4 +62,3 @@ foreach( LIBRARY ${LIBRARIES} )
 endforeach()
 
 set( GRAPH_EDGES "${GRAPH_EDGES}" PARENT_SCOPE )
-set( AUDACITY_LIBRARIES "${AUDACITY_LIBRARIES}" PARENT_SCOPE )

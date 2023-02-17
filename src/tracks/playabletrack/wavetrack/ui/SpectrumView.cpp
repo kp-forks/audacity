@@ -11,22 +11,39 @@ Paul Licameli split from WaveTrackView.cpp
 
 #include "SpectrumView.h"
 
+#include "SpectralDataManager.h" // Cycle :-(
+#include "SpectrumCache.h"
+
+#include "Sequence.h"
+#include "Spectrum.h"
+
 #include "SpectrumVRulerControls.h"
 #include "WaveTrackView.h"
 #include "WaveTrackViewConstants.h"
 
-#include "../../../../AColor.h"
+#include "../../../ui/BrushHandle.h"
+
+#include "AColor.h"
 #include "Prefs.h"
-#include "../../../../NumberScale.h"
+#include "NumberScale.h"
+#include "../../../../TrackArt.h"
 #include "../../../../TrackArtist.h"
 #include "../../../../TrackPanelDrawingContext.h"
-#include "../../../../ViewInfo.h"
-#include "../../../../WaveClip.h"
-#include "../../../../WaveTrack.h"
+#include "ViewInfo.h"
+#include "WaveClip.h"
+#include "WaveTrack.h"
 #include "../../../../prefs/SpectrogramSettings.h"
+#include "../../../../ProjectSettings.h"
+#include "SampleTrackCache.h"
+#include "WaveTrackLocation.h"
 
 #include <wx/dcmemory.h>
 #include <wx/graphics.h>
+
+#include "float_cast.h"
+
+class BrushHandle;
+class SpectralData;
 
 static WaveTrackSubView::Type sType{
    WaveTrackViewConstants::Spectrum,
@@ -35,6 +52,12 @@ static WaveTrackSubView::Type sType{
 
 static WaveTrackSubViewType::RegisteredType reg{ sType };
 
+SpectrumView::SpectrumView(WaveTrackView &waveTrackView) : WaveTrackSubView(waveTrackView) {
+   auto wt = static_cast<WaveTrack*>( FindTrack().get() );
+   mpSpectralData = std::make_shared<SpectralData>(wt->GetRate());
+   mOnBrushTool = false;
+}
+
 SpectrumView::~SpectrumView() = default;
 
 bool SpectrumView::IsSpectral() const
@@ -42,11 +65,122 @@ bool SpectrumView::IsSpectral() const
    return true;
 }
 
+class SpectrumView::SpectralDataSaver : public BrushHandle::StateSaver {
+public:
+   explicit SpectralDataSaver( SpectrumView &view )
+      : mView{ view }
+   {}
+
+   void Init( AudacityProject &project, bool clearAll ) override
+   {
+      mpProject = &project;
+      ForAll( project, [this, clearAll](SpectrumView &view){
+         auto pOldData = view.mpSpectralData;
+         if (clearAll) {
+            auto &pNewData = view.mpBackupSpectralData =
+               std::make_shared<SpectralData>(pOldData->GetSR());
+            pNewData->CopyFrom(*pOldData);
+            pOldData->clearAllData();
+         }
+         else {
+            // Back up one view only
+            if (&mView == &view) {
+               auto &pNewData = view.mpBackupSpectralData =
+                  std::make_shared<SpectralData>(pOldData->GetSR());
+               pNewData->CopyFrom( *pOldData );
+            }
+            else
+               view.mpBackupSpectralData = {};
+         }
+      });
+   }
+
+   ~SpectralDataSaver() override
+   {
+      if (mpProject)
+         ForAll( *mpProject, [this](SpectrumView &view){
+            if (mCommitted) {
+               // Discard all backups
+               view.mpBackupSpectralData = {};
+            }
+            else {
+               // Restore all
+               if (auto &pBackupData = view.mpBackupSpectralData) {
+                  view.mpSpectralData->CopyFrom(*pBackupData);
+                  pBackupData.reset();
+               }
+            }
+         });
+   }
+
+private:
+   SpectrumView &mView;
+   AudacityProject *mpProject = nullptr;
+};
+
+// This always hits, but details of the hit vary with mouse position and
+// key state.
+static UIHandlePtr BrushHandleHitTest(
+   std::weak_ptr<BrushHandle> &holder,
+   const TrackPanelMouseState &st, const AudacityProject *pProject,
+   const std::shared_ptr<SpectrumView> &pTrackView,
+   const std::shared_ptr<SpectralData> &mpData)
+{
+   const auto &viewInfo = ViewInfo::Get( *pProject );
+   auto &projectSettings = ProjectSettings::Get( *pProject );
+   auto result = std::make_shared<BrushHandle>(
+      std::make_shared<SpectrumView::SpectralDataSaver>(*pTrackView),
+      pTrackView, TrackList::Get( *pProject ),
+      st, viewInfo, mpData, projectSettings);
+
+   result = AssignUIHandlePtr(holder, result);
+
+   //Make sure we are within the selected track
+   // Adjusting the selection edges can be turned off in
+   // the preferences...
+   auto pTrack = pTrackView->FindTrack();
+   if (!pTrack->GetSelected() || !viewInfo.bAdjustSelectionEdges)
+   {
+      return result;
+   }
+
+   return result;
+}
+
+void SpectrumView::ForAll( AudacityProject &project,
+   std::function<void(SpectrumView &view)> fn )
+{
+   if (!fn)
+      return;
+   for ( const auto wt : TrackList::Get(project).Any< WaveTrack >() ) {
+      if (auto pWaveTrackView =
+          dynamic_cast<WaveTrackView*>( &TrackView::Get(*wt)) ) {
+         for (const auto &pSubView : pWaveTrackView->GetAllSubViews()) {
+            if (const auto sView = dynamic_cast<SpectrumView*>(pSubView.get()))
+               fn( *sView );
+         }
+      }
+   }
+}
+
 std::vector<UIHandlePtr> SpectrumView::DetailedHitTest(
    const TrackPanelMouseState &state,
    const AudacityProject *pProject, int currentTool, bool bMultiTool )
 {
    const auto wt = std::static_pointer_cast< WaveTrack >( FindTrack() );
+   std::vector<UIHandlePtr> results;
+
+#ifdef EXPERIMENTAL_BRUSH_TOOL
+   mOnBrushTool = (currentTool == ToolCodes::brushTool);
+   if(mOnBrushTool){
+      const auto result = BrushHandleHitTest(
+         mBrushHandle, state,
+         pProject, std::static_pointer_cast<SpectrumView>(shared_from_this()),
+         mpSpectralData);
+      results.push_back(result);
+      return results;
+   }
+#endif
 
    return WaveTrackSubView::DoDetailedHitTest(
       state, pProject, currentTool, bMultiTool, wt
@@ -68,10 +202,11 @@ void SpectrumView::DoSetMinimized( bool minimized )
       // Nyquist frequency.
       constexpr auto max = std::numeric_limits<float>::max();
       const bool spectrumLinear =
-         (wt->GetSpectrogramSettings().scaleType ==
+         (SpectrogramSettings::Get(*wt).scaleType ==
             SpectrogramSettings::stLinear);
       // Zoom out full
-      wt->SetSpectrumBounds( spectrumLinear ? 0.0f : 1.0f, max );
+      SpectrogramBounds::Get(*wt)
+         .SetBounds( spectrumLinear ? 0.0f : 1.0f, max );
    }
 #endif
 
@@ -86,6 +221,17 @@ auto SpectrumView::SubViewType() const -> const Type &
 std::shared_ptr<TrackVRulerControls> SpectrumView::DoGetVRulerControls()
 {
    return std::make_shared<SpectrumVRulerControls>( shared_from_this() );
+}
+
+std::shared_ptr<SpectralData> SpectrumView::GetSpectralData(){
+   return mpSpectralData;
+}
+
+void SpectrumView::CopyToSubView(WaveTrackSubView *destSubView) const{
+   if ( const auto pDest = dynamic_cast< SpectrumView* >( destSubView ) ) {
+      pDest->mpSpectralData =  std::make_shared<SpectralData>(mpSpectralData->GetSR());
+      pDest->mpSpectralData->CopyFrom(*mpSpectralData);
+   }
 }
 
 namespace
@@ -170,13 +316,15 @@ ChooseColorSet( float bin0, float bin1, float selBinLo,
 }
 
 void DrawClipSpectrum(TrackPanelDrawingContext &context,
-                                   WaveTrackCache &waveTrackCache,
+                                   SampleTrackCache &waveTrackCache,
                                    const WaveClip *clip,
-                                   const wxRect & rect,
+                                   const wxRect &rect,
+                                   const std::shared_ptr<SpectralData> &mpSpectralData,
                                    bool selected)
 {
    auto &dc = context.dc;
    const auto artist = TrackArtist::Get( context );
+   bool onBrushTool = artist->onBrushTool;
    const auto &selectedRegion = *artist->pSelectedRegion;
    const auto &zoomInfo = *artist->pZoomInfo;
 
@@ -184,8 +332,25 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
    Profiler profiler;
 #endif
 
-   const WaveTrack *const track = waveTrackCache.GetTrack().get();
-   const SpectrogramSettings &settings = track->GetSpectrogramSettings();
+   //If clip is "too small" draw a placeholder instead of
+   //attempting to fit the contents into a few pixels
+   if (!WaveTrackView::ClipDetailsVisible(*clip, zoomInfo, rect))
+   {
+      auto clipRect = ClipParameters::GetClipRect(*clip, zoomInfo, rect);
+      TrackArt::DrawClipFolded(dc, clipRect);
+      return;
+   }
+
+   const auto track =
+      dynamic_cast<const WaveTrack*>(waveTrackCache.GetTrack().get());
+   if (!track)
+      // Leave a blank rectangle.
+      // TODO: rewrite GetSpectrumBounds so it is
+      // not a member of WaveTrack, but fetch UI related ClientData
+      // attachments; then this downcast from SampleTrack will not be needed.
+      return;
+
+   auto &settings = SpectrogramSettings::Get(*track);
    const bool autocorrelation = (settings.algorithm == SpectrogramSettings::algPitchEAC);
 
    enum { DASH_LENGTH = 10 /* pixels */ };
@@ -252,14 +417,16 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
    bool updated;
    {
       const double pps = averagePixelsPerSample * rate;
-      updated = clip->GetSpectrogram(waveTrackCache, freq, where,
-                                     (size_t)hiddenMid.width,
+      updated = WaveClipSpectrumCache::Get( *clip ).GetSpectrogram( *clip,
+         waveTrackCache, freq, where,
+         (size_t)hiddenMid.width,
          t0, pps);
    }
    auto nBins = settings.NBins();
 
    float minFreq, maxFreq;
-   track->GetSpectrumBounds(&minFreq, &maxFreq);
+   SpectrogramBounds::Get(*track)
+      .GetBounds(*track, minFreq, maxFreq);
 
    const SpectrogramSettings::ScaleType scaleType = settings.scaleType;
 
@@ -303,13 +470,14 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
    }
 #endif //EXPERIMENTAL_FFT_Y_GRID
 
-   if (!updated && clip->mSpecPxCache->valid &&
-      ((int)clip->mSpecPxCache->len == hiddenMid.height * hiddenMid.width)
-      && scaleType == clip->mSpecPxCache->scaleType
-      && gain == clip->mSpecPxCache->gain
-      && range == clip->mSpecPxCache->range
-      && minFreq == clip->mSpecPxCache->minFreq
-      && maxFreq == clip->mSpecPxCache->maxFreq
+   auto &clipCache = WaveClipSpectrumCache::Get( *clip );
+   if (!updated && clipCache.mSpecPxCache->valid &&
+      ((int)clipCache.mSpecPxCache->len == hiddenMid.height * hiddenMid.width)
+      && scaleType == clipCache.mSpecPxCache->scaleType
+      && gain == clipCache.mSpecPxCache->gain
+      && range == clipCache.mSpecPxCache->range
+      && minFreq == clipCache.mSpecPxCache->minFreq
+      && maxFreq == clipCache.mSpecPxCache->maxFreq
 #ifdef EXPERIMENTAL_FFT_Y_GRID
    && fftYGrid==fftYGridOld
 #endif //EXPERIMENTAL_FFT_Y_GRID
@@ -325,13 +493,13 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
    }
    else {
       // Update the spectrum pixel cache
-      clip->mSpecPxCache = std::make_unique<SpecPxCache>(hiddenMid.width * hiddenMid.height);
-      clip->mSpecPxCache->valid = true;
-      clip->mSpecPxCache->scaleType = scaleType;
-      clip->mSpecPxCache->gain = gain;
-      clip->mSpecPxCache->range = range;
-      clip->mSpecPxCache->minFreq = minFreq;
-      clip->mSpecPxCache->maxFreq = maxFreq;
+      clipCache.mSpecPxCache = std::make_unique<SpecPxCache>(hiddenMid.width * hiddenMid.height);
+      clipCache.mSpecPxCache->valid = true;
+      clipCache.mSpecPxCache->scaleType = scaleType;
+      clipCache.mSpecPxCache->gain = gain;
+      clipCache.mSpecPxCache->range = range;
+      clipCache.mSpecPxCache->minFreq = minFreq;
+      clipCache.mSpecPxCache->maxFreq = maxFreq;
 #ifdef EXPERIMENTAL_FIND_NOTES
       artist->fftFindNotesOld = fftFindNotes;
       artist->findNotesMinAOld = findNotesMinA;
@@ -437,7 +605,7 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
             if (settings.scaleType != SpectrogramSettings::stLogarithmic) {
                const float value = findValue
                   (freq + nBins * xx, bin, nextBin, nBins, autocorrelation, gain, range);
-               clip->mSpecPxCache->values[xx * hiddenMid.height + yy] = value;
+               clipCache.mSpecPxCache->values[xx * hiddenMid.height + yy] = value;
             }
             else {
                float value;
@@ -475,7 +643,7 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
                   value = findValue
                      (freq + nBins * xx, bin, nextBin, nBins, autocorrelation, gain, range);
                }
-               clip->mSpecPxCache->values[xx * hiddenMid.height + yy] = value;
+               clipCache.mSpecPxCache->values[xx * hiddenMid.height + yy] = value;
             } // logF
          } // each yy
       } // each xx
@@ -510,7 +678,7 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
       specCache.Populate
          (settings, waveTrackCache,
           0, 0, numPixels,
-          clip->GetNumSamples(),
+          clip->GetPlaySamplesCount(),
           tOffset, rate,
           0 // FIXME: PRL -- make reassignment work with fisheye
        );
@@ -529,8 +697,39 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
-   for (int xx = 0; xx < mid.width; ++xx) {
 
+   const NumberScale numberScale(settings.GetScale(minFreq, maxFreq));
+   int windowSize = mpSpectralData->GetWindowSize();
+   int hopSize = mpSpectralData->GetHopSize();
+   double sr = mpSpectralData->GetSR();
+   auto &dataHistory = mpSpectralData->dataHistory;
+
+   // Lazy way to add all hops and bins required for rendering
+   dataHistory.push_back(mpSpectralData->dataBuffer);
+
+   // Generate combined hops and bins map for rendering
+   std::map<long long, std::set<int>> hopBinMap;
+   for(auto vecIter = dataHistory.begin(); vecIter != dataHistory.end(); ++vecIter){
+      for(const auto &hopMap: *vecIter){
+         for(const auto &binNum: hopMap.second)
+            hopBinMap[hopMap.first].insert(binNum);
+      }
+   }
+
+   // Lambda for converting yy (not mouse coord!) to respective freq. bins
+   auto yyToFreqBin = [&](int yy){
+      const double p = double(yy) / hiddenMid.height;
+      float convertedFreq = numberScale.PositionToValue(p);
+      float convertedFreqBinNum = convertedFreq / (sr / windowSize);
+
+      // By default lrintf will round to nearest by default, rounding to even on tie.
+      // std::round that was used here before rounds halfway cases away from zero.
+      // However, we can probably tolerate rounding issues here, as this will only slightly affect
+      // the visuals.
+      return static_cast<int>(lrintf(convertedFreqBinNum));
+   };
+
+   for (int xx = 0; xx < mid.width; ++xx) {
       int correctedX = xx + leftOffset - hiddenLeftOffset;
 
       // in fisheye mode the time scale has changed, so the row values aren't cached
@@ -556,9 +755,41 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
       bool maybeSelected = ssel0 <= w0 && w1 < ssel1;
       maybeSelected = maybeSelected || (xx == selectedX);
 
+      // In case the xx matches the hop number, it will be used as iterator for frequency bins
+      std::set<int> *pSelectedBins = nullptr;
+      std::set<int>::iterator freqBinIter;
+      auto advanceFreqBinIter = [&](int nextBinRounded){
+         while (freqBinIter != pSelectedBins->end() &&
+         *freqBinIter < nextBinRounded)
+            ++freqBinIter;
+      };
+
+      bool hitHopNum = false;
+      if (onBrushTool) {
+         int convertedHopNum = (w0.as_long_long() + hopSize / 2) / hopSize;
+         hitHopNum = (hopBinMap.find(convertedHopNum) != hopBinMap.end());
+         if(hitHopNum) {
+            pSelectedBins = &hopBinMap[convertedHopNum];
+            freqBinIter = pSelectedBins->begin();
+            advanceFreqBinIter(yyToFreqBin(0));
+         }
+      }
+   
       for (int yy = 0; yy < hiddenMid.height; ++yy) {
+         if(onBrushTool)
+            maybeSelected = false;
          const float bin     = bins[yy];
          const float nextBin = bins[yy+1];
+         auto binRounded = yyToFreqBin(yy);
+         auto nextBinRounded = yyToFreqBin(yy + 1);
+
+         if(hitHopNum
+            && freqBinIter != pSelectedBins->end()
+            && binRounded == *freqBinIter)
+            maybeSelected = true;
+
+         if (hitHopNum)
+            advanceFreqBinIter(nextBinRounded);
 
          // For spectral selection, determine what colour
          // set to use.  We use a darker selection if
@@ -567,14 +798,18 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
          AColor::ColorGradientChoice selected = AColor::ColorGradientUnselected;
 
          // If we are in the time selected range, then we may use a different color set.
-         if (maybeSelected)
+         if (maybeSelected) {
             selected =
                ChooseColorSet(bin, nextBin, selBinLo, selBinCenter, selBinHi,
                   (xx + leftOffset - hiddenLeftOffset) / DASH_LENGTH, isSpectral);
+            if ( onBrushTool && selected != AColor::ColorGradientUnselected )
+               // use only two sets of colors
+               selected = AColor::ColorGradientTimeAndFrequencySelected;
+         }
 
          const float value = uncached
             ? findValue(uncached, bin, nextBin, nBins, autocorrelation, gain, range)
-            : clip->mSpecPxCache->values[correctedX * hiddenMid.height + yy];
+            : clipCache.mSpecPxCache->values[correctedX * hiddenMid.height + yy];
 
          unsigned char rv, gv, bv;
          GetColorGradient(value, selected, colorScheme, &rv, &gv, &bv);
@@ -586,7 +821,6 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
             bv /= 1.1f;
          }
 #endif //EXPERIMENTAL_FFT_Y_GRID
-
          int px = ((mid.height - 1 - yy) * mid.width + xx);
 #ifdef EXPERIMENTAL_SPECTROGRAM_OVERLAY
          // More transparent the closer to zero intensity.
@@ -599,6 +833,7 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
       } // each yy
    } // each xx
 
+   dataHistory.pop_back();
    wxBitmap converted = wxBitmap(image);
 
    wxMemoryDC memDC;
@@ -610,10 +845,8 @@ void DrawClipSpectrum(TrackPanelDrawingContext &context,
    // Draw clip edges, as also in waveform view, which improves the appearance
    // of split views
    {
-      //increase virtual view size by px to hide edges that should not be visible
-      auto clipRect = ClipParameters::GetClipRect(*clip, zoomInfo, rect.Inflate(1, 0), 1);
-      if (!clipRect.IsEmpty())
-         TrackArt::DrawClipEdges(dc, clipRect, selected);
+      auto clipRect = ClipParameters::GetClipRect(*clip, zoomInfo, rect);
+      TrackArt::DrawClipEdges(dc, clipRect, selected);
    }
 }
 
@@ -630,9 +863,11 @@ void SpectrumView::DoDraw(TrackPanelDrawingContext& context,
    TrackArt::DrawBackgroundWithSelection(
       context, rect, track, blankSelectedBrush, blankBrush );
 
-   WaveTrackCache cache(track->SharedPointer<const WaveTrack>());
-   for (const auto &clip: track->GetClips())
-      DrawClipSpectrum( context, cache, clip.get(), rect, clip.get() == selectedClip );
+   SampleTrackCache cache(track->SharedPointer<const WaveTrack>());
+   for (const auto &clip: track->GetClips()){
+      DrawClipSpectrum( context, cache, clip.get(), rect,
+                        mpSpectralData, clip.get() == selectedClip);
+   }
 
    DrawBoldBoundaries( context, track, rect );
 }
@@ -648,8 +883,10 @@ void SpectrumView::Draw(
       // If both channels are visible, we will duplicate this effort, but that
       // matters little.
       for( auto channel:
-          TrackList::Channels(static_cast<WaveTrack*>(FindTrack().get())) )
-         channel->UpdateLocationsCache();
+          TrackList::Channels(static_cast<WaveTrack*>(FindTrack().get())) ) {
+         auto &locationsCache = WaveTrackLocations::Get( *channel );
+         locationsCache.Update( *channel );
+      }
 
       const auto wt = std::static_pointer_cast<const WaveTrack>(
          FindTrack()->SubstitutePendingChangedTrack());
@@ -684,9 +921,9 @@ static const WaveTrackSubViews::RegisteredFactory key{
 // menu.  It is appropriate only to spectrum view and so is kept in this
 // source file with the rest of the spectrum view implementation.
 #include "WaveTrackControls.h"
-#include "../../../../AudioIOBase.h"
+#include "AudioIOBase.h"
 #include "../../../../Menus.h"
-#include "../../../../ProjectHistory.h"
+#include "ProjectHistory.h"
 #include "../../../../RefreshCode.h"
 #include "../../../../prefs/PrefsDialog.h"
 #include "../../../../prefs/SpectrumPrefs.h"
@@ -708,11 +945,6 @@ struct SpectrogramSettingsHandler : PopupMenuHandler {
    void InitUserData(void *pUserData) override
    {
       mpData = static_cast< PlayableTrackControls::InitMenuData* >(pUserData);
-   }
-
-   void DestroyMenu() override
-   {
-      mpData = nullptr;
    }
 };
 
@@ -820,3 +1052,155 @@ PopupMenuTable::AttachedItem sAttachment{
 };
 }
 
+static bool ShouldCaptureEvent(wxKeyEvent& event, SpectralData *pData)
+{
+   const auto keyCode = event.GetKeyCode();
+   return
+      (keyCode == WXK_BACK || keyCode == WXK_DELETE ||
+       keyCode == WXK_NUMPAD_DELETE)
+      && pData && !pData->dataHistory.empty();
+}
+
+unsigned SpectrumView::CaptureKey(
+   wxKeyEvent& event, ViewInfo&, wxWindow*, AudacityProject*)
+{
+   bool capture = ShouldCaptureEvent(event, mpSpectralData.get());
+   event.Skip(!capture);
+   return RefreshCode::RefreshNone;
+}
+
+unsigned SpectrumView::KeyDown(wxKeyEvent& event, ViewInfo& viewInfo, wxWindow*, AudacityProject* project)
+{
+   bool capture = ShouldCaptureEvent(event, mpSpectralData.get());
+   event.Skip(!capture);
+   if (capture && SpectralDataManager::ProcessTracks(*project))
+      // Not RefreshCell, because there might be effects in multiple tracks
+      return RefreshCode::RefreshAll;
+   return RefreshCode::RefreshNone;
+}
+
+unsigned SpectrumView::Char(
+   wxKeyEvent &event, ViewInfo&, wxWindow*, AudacityProject* )
+{
+   bool capture = ShouldCaptureEvent(event, mpSpectralData.get());
+   event.Skip(!capture);
+   return RefreshCode::RefreshNone;
+}
+
+#ifdef EXPERIMENTAL_SPECTRAL_EDITING
+// Attach some related menu items
+#include "../../../ui/SelectHandle.h"
+#include "../../../../CommonCommandFlags.h"
+#include "Project.h"
+#include "../../../../SpectrumAnalyst.h"
+#include "../../../../commands/CommandContext.h"
+
+namespace {
+void DoNextPeakFrequency(AudacityProject &project, bool up)
+{
+   auto &tracks = TrackList::Get( project );
+   auto &viewInfo = ViewInfo::Get( project );
+
+   // Find the first selected wave track that is in a spectrogram view.
+   const WaveTrack *pTrack {};
+   for ( auto wt : tracks.Selected< const WaveTrack >() ) {
+      const auto displays = WaveTrackView::Get( *wt ).GetDisplays();
+      bool hasSpectrum = (displays.end() != std::find(
+         displays.begin(), displays.end(),
+         WaveTrackSubView::Type{ WaveTrackViewConstants::Spectrum, {} }
+      ) );
+      if ( hasSpectrum ) {
+         pTrack = wt;
+         break;
+      }
+   }
+
+   if (pTrack) {
+      SpectrumAnalyst analyst;
+      SelectHandle::SnapCenterOnce(analyst, viewInfo, pTrack, up);
+      ProjectHistory::Get( project ).ModifyState(false);
+   }
+}
+
+struct Handler : CommandHandlerObject, ClientData::Base {
+
+// Handler state:
+double mLastF0{ SelectedRegion::UndefinedFrequency };
+double mLastF1{ SelectedRegion::UndefinedFrequency };
+
+void OnToggleSpectralSelection(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto &selectedRegion = ViewInfo::Get( project ).selectedRegion;
+
+   const double f0 = selectedRegion.f0();
+   const double f1 = selectedRegion.f1();
+   const bool haveSpectralSelection =
+   !(f0 == SelectedRegion::UndefinedFrequency &&
+     f1 == SelectedRegion::UndefinedFrequency);
+   if (haveSpectralSelection)
+   {
+      mLastF0 = f0;
+      mLastF1 = f1;
+      selectedRegion.setFrequencies
+      (SelectedRegion::UndefinedFrequency, SelectedRegion::UndefinedFrequency);
+   }
+   else
+      selectedRegion.setFrequencies(mLastF0, mLastF1);
+
+   ProjectHistory::Get( project ).ModifyState(false);
+}
+
+void OnNextHigherPeakFrequency(const CommandContext &context)
+{
+   auto &project = context.project;
+   DoNextPeakFrequency(project, true);
+}
+
+void OnNextLowerPeakFrequency(const CommandContext &context)
+{
+   auto &project = context.project;
+   DoNextPeakFrequency(project, false);
+}
+};
+
+// Handler is stateful.  Needs a factory registered with
+// AudacityProject.
+static const AttachedProjectObjects::RegisteredFactory key{
+   [](AudacityProject&) {
+      return std::make_unique< Handler >(); } };
+
+static CommandHandlerObject &findCommandHandler(AudacityProject &project) {
+   return project.AttachedObjects::Get< Handler >( key );
+};
+
+using namespace MenuTable;
+#define FN(X) (& Handler :: X)
+
+BaseItemSharedPtr SpectralSelectionMenu()
+{
+   static BaseItemSharedPtr menu{
+   ( FinderScope{ findCommandHandler },
+   Menu( wxT("Spectral"), XXO("S&pectral"),
+      Command( wxT("ToggleSpectralSelection"),
+         XXO("To&ggle Spectral Selection"), FN(OnToggleSpectralSelection),
+         TracksExistFlag(), wxT("Q") ),
+      Command( wxT("NextHigherPeakFrequency"),
+         XXO("Next &Higher Peak Frequency"), FN(OnNextHigherPeakFrequency),
+         TracksExistFlag() ),
+      Command( wxT("NextLowerPeakFrequency"),
+         XXO("Next &Lower Peak Frequency"), FN(OnNextLowerPeakFrequency),
+         TracksExistFlag() )
+   ) ) };
+   return menu;
+}
+
+#undef FN
+
+AttachedItem sAttachment2{
+   Placement{ wxT("Select/Basic"), { OrderingHint::After, wxT("Region") } },
+   Shared( SpectralSelectionMenu() )
+};
+
+}
+#endif // EXPERIMENTAL_SPECTRAL_EDITING

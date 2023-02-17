@@ -17,25 +17,23 @@
 
 #include "PrefsDialog.h"
 
+#include <thread>
+
 #include <wx/app.h>
 #include <wx/setup.h> // for wxUSE_* macros
 #include <wx/defs.h>
-#include <wx/button.h>
-#include <wx/dialog.h>
-#include <wx/event.h>
 #include <wx/font.h>
 #include <wx/gdicmn.h>
-#include <wx/intl.h>
 #include <wx/listbox.h>
-#include <wx/sizer.h>
 
 #include <wx/listbook.h>
 
 #include <wx/treebook.h>
 #include <wx/treectrl.h>
 
-#include "../AudioIOBase.h"
+#include "AudioIOBase.h"
 #include "Prefs.h"
+#include "ProjectWindows.h"
 #include "../ShuttleGui.h"
 #include "../commands/CommandManager.h"
 
@@ -586,6 +584,8 @@ PrefsDialog::PrefsDialog(
    // Center after all that resizing, but make sure it doesn't end up
    // off-screen
    CentreOnParent();
+
+   mTransaction = std::make_unique< SettingTransaction >();
 }
 
 PrefsDialog::~PrefsDialog()
@@ -752,8 +752,10 @@ void PrefsDialog::OnOK(wxCommandEvent & WXUNUSED(event))
       if (gAudioIO->IsMonitoring())
       {
          gAudioIO->StopStream();
-         while (gAudioIO->IsBusy())
-            wxMilliSleep(100);
+         while (gAudioIO->IsBusy()) {
+            using namespace std::chrono;
+            std::this_thread::sleep_for(100ms);
+         }
       }
       gAudioIO->HandleDeviceChange();
    }
@@ -767,6 +769,8 @@ void PrefsDialog::OnOK(wxCommandEvent & WXUNUSED(event))
    //      not cause MenuCreator::RebuildMenuBar() to be executed.
 
    PrefsListener::Broadcast();
+
+   mTransaction->Commit();
 
    if( IsModal() )
       EndModal(true);
@@ -840,7 +844,7 @@ void PrefsDialog::RecordExpansionState()
 
 #include <wx/frame.h>
 #include "../Menus.h"
-#include "../Project.h"
+#include "Project.h"
 
 void DoReloadPreferences( AudacityProject &project )
 {

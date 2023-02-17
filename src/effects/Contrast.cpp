@@ -13,19 +13,20 @@
 #include "Contrast.h"
 
 #include "../CommonCommandFlags.h"
-#include "../WaveTrack.h"
+#include "WaveTrack.h"
 #include "Prefs.h"
-#include "../Project.h"
+#include "Project.h"
 #include "../ProjectFileIO.h"
-#include "../ProjectSettings.h"
+#include "ProjectRate.h"
 #include "../ProjectWindow.h"
 #include "../SelectFile.h"
 #include "../ShuttleGui.h"
 #include "FileNames.h"
-#include "../ViewInfo.h"
+#include "ViewInfo.h"
 #include "../widgets/HelpSystem.h"
 #include "../widgets/NumericTextCtrl.h"
 #include "../widgets/AudacityMessageBox.h"
+#include "../widgets/VetoDialogHook.h"
 
 #include <cmath>
 #include <limits>
@@ -213,8 +214,7 @@ ContrastDialog::ContrastDialog(wxWindow * parent, wxWindowID id,
    wxString number;
 
    auto p = FindProjectFromWindow( this );
-   const auto &settings = ProjectSettings::Get( *p );
-   mProjectRate = settings.GetRate();
+   mProjectRate = ProjectRate::Get(*p).GetRate();
 
       const auto options = NumericTextCtrl::Options{}
          .AutoPos(true)
@@ -653,12 +653,12 @@ void ContrastDialog::OnReset(wxCommandEvent & /*event*/)
 // Remaining code hooks this add-on into the application
 #include "commands/CommandContext.h"
 #include "commands/CommandManager.h"
-#include "../commands/ScreenshotCommand.h"
+#include "ProjectWindows.h"
 
 namespace {
 
 // Contrast window attached to each project is built on demand by:
-AudacityProject::AttachedWindows::RegisteredFactory sContrastDialogKey{
+AttachedWindows::RegisteredFactory sContrastDialogKey{
    []( AudacityProject &parent ) -> wxWeakRef< wxWindow > {
       auto &window = ProjectWindow::Get( parent );
       return safenew ContrastDialog(
@@ -669,37 +669,29 @@ AudacityProject::AttachedWindows::RegisteredFactory sContrastDialogKey{
 };
 
 // Define our extra menu item that invokes that factory
-struct Handler : CommandHandlerObject {
+namespace {
    void OnContrast(const CommandContext &context)
    {
       auto &project = context.project;
       CommandManager::Get(project).RegisterLastAnalyzer(context);  //Register Contrast as Last Analyzer
-      auto contrastDialog =
-         &project.AttachedWindows::Get< ContrastDialog >( sContrastDialogKey );
+      auto contrastDialog = &GetAttachedWindows(project)
+         .Get< ContrastDialog >( sContrastDialogKey );
 
       contrastDialog->CentreOnParent();
-      if( ScreenshotCommand::MayCapture( contrastDialog ) )
+      if( VetoDialogHook::Call( contrastDialog ) )
          return;
       contrastDialog->Show();
    }
-};
-
-CommandHandlerObject &findCommandHandler(AudacityProject &) {
-   // Handler is not stateful.  Doesn't need a factory registered with
-   // AudacityProject.
-   static Handler instance;
-   return instance;
 }
 
 // Register that menu item
 
 using namespace MenuTable;
 AttachedItem sAttachment{ wxT("Analyze/Analyzers/Windows"),
-   ( FinderScope{ findCommandHandler },
-      Command( wxT("ContrastAnalyser"), XXO("Contrast..."),
-         &Handler::OnContrast,
-         AudioIONotBusyFlag() | WaveTracksSelectedFlag() | TimeSelectedFlag(),
-         wxT("Ctrl+Shift+T") ) )
+   Command( wxT("ContrastAnalyser"), XXO("Contrast..."),
+      OnContrast,
+      AudioIONotBusyFlag() | WaveTracksSelectedFlag() | TimeSelectedFlag(),
+      wxT("Ctrl+Shift+T") )
 };
 
 }

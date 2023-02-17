@@ -11,13 +11,13 @@ Paul Licameli split from TrackPanel.cpp
 
 #include "TrackButtonHandles.h"
 
-#include "../../Project.h"
-#include "../../ProjectAudioIO.h"
+#include "Project.h"
+#include "ProjectAudioIO.h"
 #include "../../ProjectAudioManager.h"
-#include "../../ProjectHistory.h"
+#include "ProjectHistory.h"
 #include "../../SelectUtilities.h"
 #include "../../RefreshCode.h"
-#include "../../Track.h"
+#include "Track.h"
 #include "../../TrackPanelAx.h"
 #include "../../TrackInfo.h"
 #include "../../TrackPanel.h"

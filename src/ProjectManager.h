@@ -16,12 +16,16 @@ Paul Licameli split from AudacityProject.h
 #include <wx/event.h> // to inherit
 #include "ClientData.h" // to inherit
 #include "Identifier.h"
+#include "Observer.h"
 
 class wxTimer;
 class wxTimerEvent;
 
 class AudacityProject;
 struct AudioIOStartStreamOptions;
+
+enum StatusBarField : int;
+enum class ProjectFileIOMessage : int;
 
 ///\brief Object associated with a project for high-level management of the
 /// project's lifetime, including creation, destruction, opening from file,
@@ -109,12 +113,13 @@ public:
    void SetStatusText( const TranslatableString &text, int number );
    void SetSkipSavePrompt(bool bSkip) { sbSkipPromptingForSave = bSkip; };
 
+   static void SetClosingAll(bool closing);
+
 private:
-   void OnReconnectionFailure(wxCommandEvent & event);
+   void OnReconnectionFailure(ProjectFileIOMessage);
    void OnCloseWindow(wxCloseEvent & event);
    void OnTimer(wxTimerEvent & event);
-   void OnOpenAudioFile(wxCommandEvent & event);
-   void OnStatusChange( wxCommandEvent& );
+   void OnStatusChange(StatusBarField field);
 
    void RestartTimer();
 
@@ -122,6 +127,9 @@ private:
    AudacityProject &mProject;
 
    std::unique_ptr<wxTimer> mTimer;
+
+   Observer::Subscription mProjectStatusSubscription,
+      mProjectFileIOSubscription;
 
    DECLARE_EVENT_TABLE()
 

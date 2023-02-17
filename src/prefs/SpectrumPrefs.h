@@ -44,8 +44,8 @@ class SpectrumPrefs final : public PrefsPanel
    SpectrumPrefs(wxWindow * parent, wxWindowID winid,
       AudacityProject *pProject, WaveTrack *wt);
    virtual ~SpectrumPrefs();
-   ComponentInterfaceSymbol GetSymbol() override;
-   TranslatableString GetDescription() override;
+   ComponentInterfaceSymbol GetSymbol() const override;
+   TranslatableString GetDescription() const override;
 
    void Preview() override;
    bool Commit() override;
@@ -78,11 +78,12 @@ class SpectrumPrefs final : public PrefsPanel
    wxTextCtrl *mRange;
    wxTextCtrl *mFrequencyGain;
 
-#ifdef EXPERIMENTAL_ZERO_PADDED_SPECTROGRAMS
+   /*
+    Zero-padding factor for spectrograms can smooth the display of
+    spectrograms by interpolating in frequency domain. */
    int mZeroPaddingChoice;
    wxChoice *mZeroPaddingChoiceCtrl;
    TranslatableStrings mZeroPaddingChoices;
-#endif
 
    TranslatableStrings mTypeChoices;
 

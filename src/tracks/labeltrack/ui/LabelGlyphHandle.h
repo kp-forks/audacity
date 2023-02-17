@@ -12,6 +12,7 @@ Paul Licameli split from TrackPanel.cpp
 #define __AUDACITY_LABEL_GLYPH_HANDLE__
 
 #include "LabelDefaultClickHandle.h"
+#include "Observer.h"
 
 class wxMouseState;
 class LabelTrack;
@@ -43,13 +44,12 @@ struct LabelTrackHit
 
    std::shared_ptr<LabelTrack> mpLT {};
 
-   void OnLabelPermuted( LabelTrackEvent &e );
+   Observer::Subscription mSubscription;
+   void OnLabelPermuted( const LabelTrackEvent &e );
 };
 
 class LabelGlyphHandle final : public LabelDefaultClickHandle
 {
-   static HitTestPreview HitPreview(bool hitCenter);
-
 public:
    explicit LabelGlyphHandle
       (const std::shared_ptr<LabelTrack> &pLT,

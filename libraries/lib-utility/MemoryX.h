@@ -129,134 +129,6 @@ public:
 };
 
 /**
-  \class Optional
-  \brief Like a smart pointer, allows for object to not exist (nullptr)
-  \brief emulating some of std::optional of C++17
-
-  template class Optional<X>
-  Can be used for monomorphic objects that are stack-allocable, but only conditionally constructed.
-  You might also use it as a member.
-  Initialize with emplace(), then use like a smart pointer,
-  with *, ->, reset(), or in if()
- */
-
-template<typename X>
-class Optional {
-public:
-
-   using value_type = X;
-
-   // Construct as NULL
-   Optional() {}
-
-   // Supply the copy and move, so you might use this as a class member too
-   Optional(const Optional &that)
-   {
-      if (that)
-         emplace(*that);
-   }
-
-   Optional& operator= (const Optional &that)
-   {
-      if (this != &that) {
-         if (that)
-            emplace(*that);
-         else
-            reset();
-      }
-      return *this;
-   }
-
-   Optional(Optional &&that)
-   {
-      if (that)
-         emplace(::std::move(*that));
-   }
-
-   Optional& operator= (Optional &&that)
-   {
-      if (this != &that) {
-         if (that)
-            emplace(::std::move(*that));
-         else
-            reset();
-      }
-      return *this;
-   }
-
-   /// Make an object in the buffer, passing constructor arguments,
-   /// but destroying any previous object first
-   /// Note that if constructor throws, we remain in a consistent
-   /// NULL state -- giving exception safety but only weakly
-   /// (previous value was lost if present)
-   template<typename... Args>
-   X& emplace(Args&&... args)
-   {
-      // Lose any old value
-      reset();
-      // emplace NEW value
-      pp = safenew(address()) X(std::forward<Args>(args)...);
-      return **this;
-   }
-
-   // Destroy any object that was built in it
-   ~Optional()
-   {
-      reset();
-   }
-
-   // Pointer-like operators
-
-   /// Dereference, with the usual bad consequences if NULL
-   X &operator* () const
-   {
-      return *pp;
-   }
-
-   X *operator-> () const
-   {
-      return pp;
-   }
-
-   void reset()
-   {
-      if (pp)
-         pp->~X(), pp = nullptr;
-   }
-
-   // So you can say if(ptr)
-   explicit operator bool() const
-   {
-      return pp != nullptr;
-   }
-
-   bool has_value() const
-   {
-      return pp != nullptr;
-   }
-
-private:
-   X* address()
-   {
-      return reinterpret_cast<X*>(&storage);
-   }
-
-   // Data
-#if 0
-   typename ::std::aligned_storage<
-      sizeof(X)
-      // , alignof(X) // Not here yet in all compilers
-   >::type storage{};
-#else
-   union {
-      double d;
-      char storage[sizeof(X)];
-   };
-#endif
-   X* pp{ nullptr };
-};
-
-/**
   A deleter for pointers obtained with malloc
  */
 struct freer { void operator() (void *p) const { free(p); } };
@@ -298,19 +170,27 @@ using Destroy_ptr = std::unique_ptr<T, Destroyer<T>>;
 
 // Construct this from any copyable function object, such as a lambda
 template <typename F>
-struct Final_action {
-   Final_action(F f) : clean( f ) {}
-   ~Final_action() { clean(); }
+struct Finally {
+   Finally(F f) : clean( f ) {}
+   ~Finally() { clean(); }
    F clean;
 };
 
-/// \brief Function template with type deduction lets you construct Final_action
+/// \brief Function template with type deduction lets you construct Finally
 /// without typing any angle brackets
 template <typename F>
-Final_action<F> finally (F f)
+[[nodiscard]] Finally<F> finally (F f)
 {
-   return Final_action<F>(f);
+   return Finally<F>(f);
 }
+
+//! C++17 deduction guide allows even simpler syntax:
+//! `Finally Do{[&]{ Stuff(); }};`
+/*!
+ Don't omit `Do` or some other variable name!  Otherwise, the execution of the
+ body is immediate, not delayed to the end of the enclosing scope.
+ */
+template<typename F> Finally(F) -> Finally<F>;
 
 #include <algorithm>
 
@@ -363,13 +243,15 @@ ValueRestorer< T > valueRestorer( T& var, const T& newValue )
   they cooperate correctly with stl algorithms and std::reverse_iterator
  */
 template< typename Value, typename Category = std::forward_iterator_tag >
-using ValueIterator = std::iterator<
-   Category, const Value, ptrdiff_t,
+struct ValueIterator{
+   using iterator_category = Category;
+   using value_type = Value;
+   using difference_type = ptrdiff_t;
    // void pointer type so that operator -> is disabled
-   void,
+   using pointer = void;
    // make "reference type" really the same as the value type
-   const Value
->;
+   using reference = const Value;
+};
 
 /**
   \brief A convenience for use with range-for
@@ -587,7 +469,7 @@ OutContainer transform_container( InContainer &inContainer, Function &&fn )
  macOS builds under current limitations of the C++17 standard implementation.
  */
 struct UTILITY_API alignas(
-#ifdef __WIN32__
+#ifdef _WIN32
    std::hardware_destructive_interference_size
 #else
    // That constant isn't defined for the other builds yet
@@ -612,6 +494,27 @@ NonInterferingBase {
 #endif
 };
 
+//! Workaround for std::make_shared not working on macOs with over-alignment
+/*!
+ Defines a static member function to use as an alternative to that in std::
+ */
+template<typename T> // CRTP
+struct SharedNonInterfering : NonInterferingBase
+{
+   template<typename... Args>
+   static std::shared_ptr<T> make_shared(Args &&...args)
+   {
+      return std::
+#ifdef __APPLE__
+         // shared_ptr must be constructed from unique_ptr on Mac
+         make_unique
+#else
+         make_shared
+#endif
+                    <T>(std::forward<Args>(args)...);
+   }
+};
+
 /*! Given a structure type T, derive a structure with sufficient padding so that there is not false sharing of
  cache lines between successive elements of an array of those structures.
  */
@@ -620,6 +523,18 @@ template< typename T > struct NonInterfering
    , T
 {
    using T::T;
+
+   //! Allow assignment from default-aligned base type
+   void Set(const T &other)
+   {
+      T::operator =(other);
+   }
+
+   //! Allow assignment from default-aligned base type
+   void Set(T &&other)
+   {
+      T::operator =(std::move(other));
+   }
 };
 
 // These macros are used widely, so declared here.
@@ -629,5 +544,99 @@ template< typename T > struct NonInterfering
 #define LINEAR_TO_DB(x) (20.0 * log10(x))
 
 #define MAX_AUDIO (1. - 1./(1<<15))
+
+#include <type_traits>
+#include <variant>
+#include <stdexcept>
+
+//! Help to define Visit() below
+template <typename Visitor, typename Variant>
+struct VisitHelperReturn {
+   using Var = std::remove_reference_t<Variant>;
+   using Alt = std::variant_alternative_t<0, Var>;
+   using QAlt = std::conditional_t<
+      std::is_const_v<Var>, const Alt, Alt >;
+   using Arg = std::conditional_t<std::is_lvalue_reference_v<Variant>,
+      std::add_lvalue_reference_t<QAlt>, std::add_rvalue_reference_t<QAlt>
+   >;
+   // All this just so that the noreturn function below has an appropriate type
+   using type = decltype( std::invoke(
+     std::forward<Visitor>( std::declval<Visitor>() ),
+     std::declval<Arg>() ) );
+};
+
+//! Help to define Visit() below
+template <typename Visitor, typename Variant>
+[[noreturn]] auto VisitHelper(Visitor &&, Variant &&)
+   -> typename VisitHelperReturn<Visitor, Variant>::type
+{
+   // Fall through here when the variant holds no value
+   // Should really throw std::bad_variant_access but that may not be available
+   throw std::invalid_argument{"Bad variant"};
+}
+
+//! Help to define Visit() below
+template <size_t Index, size_t... Indices, typename Visitor, typename Variant>
+auto VisitHelper(Visitor &&vis, Variant &&var)
+{
+   // Invoke vis at most once after no-throw testing for presence of
+   // alternatives in the variant
+   if (const auto pValue = std::get_if<Index>(&var)) {
+      if constexpr (std::is_lvalue_reference_v<Variant>)
+         return std::invoke( std::forward<Visitor>(vis), (*pValue) );
+      else
+         return std::invoke( std::forward<Visitor>(vis), std::move(*pValue) );
+   }
+   // Recur down the index value pack
+   return VisitHelper<Indices...>(
+      std::forward<Visitor>(vis), std::forward<Variant>(var));
+}
+
+//! Help to define Visit() below
+template <size_t... Indices, typename Visitor, typename Variant>
+auto VisitHelper(std::index_sequence<Indices...>, Visitor &&vis, Variant &&var)
+{
+   // Non-template parameters were deduced and are passed on as non-deduced
+   return VisitHelper<Indices...>(
+      std::forward<Visitor>(vis), std::forward<Variant>(var) );
+}
+
+//! Mimic some of std::visit, for the case of one visitor only
+/*! This is necessary because of limitations of the macOS implementation of
+ some of the C++17 standard library without a minimum version of 10.13, and
+ so let's use this even when not needed on the other platforms, instead of having
+ too much conditional compilation
+ */
+template <typename Visitor, typename Variant>
+auto Visit(Visitor &&vis, Variant &&var)
+{
+   constexpr auto size = std::variant_size_v<std::remove_reference_t<Variant>>;
+   return VisitHelper( std::make_index_sequence<size>{},
+      std::forward<Visitor>(vis), std::forward<Variant>(var) );
+}
+
+//! Atomic unique pointer (for nonarray type only) with a destructor;
+//! It doesn't copy or move
+template<typename T>
+struct AtomicUniquePointer : public std::atomic<T*> {
+   static_assert(AtomicUniquePointer::is_always_lock_free);
+   using std::atomic<T*>::atomic;
+   //! Reassign the pointer with release ordering,
+   //! then destroy any previously held object
+   /*!
+    Like `std::unique_ptr`, does not check for reassignment of the same pointer */
+   void reset(T *p = nullptr) {
+      delete this->exchange(p, std::memory_order_release);
+   }
+   //! reset to a pointer to a new object with given ctor arguments
+   template<typename... Args> void emplace(Args &&... args) {
+      reset(safenew T(std::forward<Args>(args)...));
+   }
+   ~AtomicUniquePointer() { reset(); }
+private:
+   //! Disallow pointer arithmetic
+   using std::atomic<T*>::fetch_add;
+   using std::atomic<T*>::fetch_sub;
+};
 
 #endif // __AUDACITY_MEMORY_X_H__

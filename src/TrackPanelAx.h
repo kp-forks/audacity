@@ -16,26 +16,21 @@
 #include <functional>
 #include <memory>
 
-#include <wx/event.h> // to declare custom event types
 #include <wx/setup.h> // for wxUSE_* macros
-
-#include <wx/string.h> // member variable
 
 #if wxUSE_ACCESSIBILITY
 #include "widgets/WindowAccessible.h" // to inherit
 #endif
 
 #include "ClientData.h" // to inherit
+#include "Observer.h"
 
 class wxRect;
+class wxWindow;
 
 class AudacityProject;
 class Track;
 class TrackList;
-
-// An event sent to the project
-wxDECLARE_EXPORTED_EVENT(AUDACITY_DLL_API,
-                         EVT_TRACK_FOCUS_CHANGE, wxCommandEvent);
 
 class TrackPanelAx final
 #if wxUSE_ACCESSIBILITY
@@ -156,8 +151,12 @@ private:
    int mMessageCount;
 };
 
+struct TrackFocusChangeMessage {};
+
 class AUDACITY_DLL_API TrackFocus final
    : public ClientData::Base
+   , public Observer::Publisher<TrackFocusChangeMessage>
+   , public std::enable_shared_from_this<TrackFocus>
 {
 public:
    static TrackFocus &Get( AudacityProject &project );
@@ -191,6 +190,7 @@ public:
    void UpdateAccessibility();
 
 private:
+   friend TrackPanelAx; // so it can Publish()
 
    AudacityProject &mProject;
 

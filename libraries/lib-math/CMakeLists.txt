@@ -24,12 +24,11 @@ set( SOURCES
    Spectrum.cpp
    Spectrum.h
    float_cast.h
+   Gain.h
 )
 set( LIBRARIES
    libsoxr
    lib-preferences-interface
-   PRIVATE
-   wxBase
 )
 audacity_library( lib-math "${SOURCES}" "${LIBRARIES}"
    "" ""

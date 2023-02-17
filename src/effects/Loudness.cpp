@@ -19,41 +19,32 @@
 
 #include <math.h>
 
-#include <wx/intl.h>
 #include <wx/simplebook.h>
 #include <wx/valgen.h>
 
 #include "Internat.h"
 #include "Prefs.h"
 #include "../ProjectFileManager.h"
-#include "../Shuttle.h"
 #include "../ShuttleGui.h"
-#include "../WaveTrack.h"
+#include "WaveTrack.h"
 #include "../widgets/valnum.h"
 #include "../widgets/ProgressDialog.h"
 
 #include "LoadEffects.h"
 
-enum kNormalizeTargets
-{
-   kLoudness,
-   kRMS,
-   nAlgos
-};
-
-static const EnumValueSymbol kNormalizeTargetStrings[nAlgos] =
+static const EnumValueSymbol kNormalizeTargetStrings[EffectLoudness::nAlgos] =
 {
    { XO("perceived loudness") },
    { XO("RMS") }
 };
-// Define keys, defaults, minimums, and maximums for the effect parameters
-//
-//     Name         Type     Key                        Def         Min      Max       Scale
-Param( StereoInd,   bool,    wxT("StereoIndependent"),   false,      false,   true,     1  );
-Param( LUFSLevel,   double,  wxT("LUFSLevel"),           -23.0,      -145.0,  0.0,      1  );
-Param( RMSLevel,    double,  wxT("RMSLevel"),            -20.0,      -145.0,  0.0,      1  );
-Param( DualMono,    bool,    wxT("DualMono"),            true,       false,   true,     1  );
-Param( NormalizeTo, int,     wxT("NormalizeTo"),         kLoudness , 0    ,   nAlgos-1, 1  );
+
+const EffectParameterMethods& EffectLoudness::Parameters() const
+{
+   static CapturedParameters<EffectLoudness,
+      StereoInd, LUFSLevel, RMSLevel, DualMono, NormalizeTo
+   > parameters;
+   return parameters;
+}
 
 BEGIN_EVENT_TABLE(EffectLoudness, wxEvtHandler)
    EVT_CHOICE(wxID_ANY, EffectLoudness::OnChoice)
@@ -68,12 +59,7 @@ namespace{ BuiltinEffectsModule::Registration< EffectLoudness > reg; }
 
 EffectLoudness::EffectLoudness()
 {
-   mStereoInd = DEF_StereoInd;
-   mLUFSLevel = DEF_LUFSLevel;
-   mRMSLevel = DEF_RMSLevel;
-   mDualMono = DEF_DualMono;
-   mNormalizeTo = DEF_NormalizeTo;
-
+   Parameters().Reset(*this);
    SetLinearEffectFlag(false);
 }
 
@@ -83,101 +69,38 @@ EffectLoudness::~EffectLoudness()
 
 // ComponentInterface implementation
 
-ComponentInterfaceSymbol EffectLoudness::GetSymbol()
+ComponentInterfaceSymbol EffectLoudness::GetSymbol() const
 {
    return Symbol;
 }
 
-TranslatableString EffectLoudness::GetDescription()
+TranslatableString EffectLoudness::GetDescription() const
 {
    return XO("Sets the loudness of one or more tracks");
 }
 
-ManualPageID EffectLoudness::ManualPage()
+ManualPageID EffectLoudness::ManualPage() const
 {
    return L"Loudness_Normalization";
 }
 
 // EffectDefinitionInterface implementation
 
-EffectType EffectLoudness::GetType()
+EffectType EffectLoudness::GetType() const
 {
    return EffectTypeProcess;
 }
 
-// EffectClientInterface implementation
-bool EffectLoudness::DefineParams( ShuttleParams & S )
-{
-   S.SHUTTLE_PARAM( mStereoInd, StereoInd );
-   S.SHUTTLE_PARAM( mLUFSLevel, LUFSLevel );
-   S.SHUTTLE_PARAM( mRMSLevel, RMSLevel );
-   S.SHUTTLE_PARAM( mDualMono, DualMono );
-   S.SHUTTLE_PARAM( mNormalizeTo, NormalizeTo );
-   return true;
-}
-
-bool EffectLoudness::GetAutomationParameters(CommandParameters & parms)
-{
-   parms.Write(KEY_StereoInd, mStereoInd);
-   parms.Write(KEY_LUFSLevel, mLUFSLevel);
-   parms.Write(KEY_RMSLevel, mRMSLevel);
-   parms.Write(KEY_DualMono, mDualMono);
-   parms.Write(KEY_NormalizeTo, mNormalizeTo);
-
-   return true;
-}
-
-bool EffectLoudness::SetAutomationParameters(CommandParameters & parms)
-{
-   ReadAndVerifyBool(StereoInd);
-   ReadAndVerifyDouble(LUFSLevel);
-   ReadAndVerifyDouble(RMSLevel);
-   ReadAndVerifyBool(DualMono);
-   ReadAndVerifyInt(NormalizeTo);
-
-   mStereoInd = StereoInd;
-   mLUFSLevel = LUFSLevel;
-   mRMSLevel = RMSLevel;
-   mDualMono = DualMono;
-   mNormalizeTo = NormalizeTo;
-
-   return true;
-}
-
 // Effect implementation
 
-bool EffectLoudness::CheckWhetherSkipEffect()
-{
-   return false;
-}
-
-bool EffectLoudness::Startup()
-{
-   wxString base = wxT("/Effects/Loudness/");
-   // Load the old "current" settings
-   if (gPrefs->Exists(base))
-   {
-      mStereoInd = false;
-      mDualMono = DEF_DualMono;
-      mNormalizeTo = kLoudness;
-      mLUFSLevel = DEF_LUFSLevel;
-      mRMSLevel = DEF_RMSLevel;
-
-      SaveUserPreset(GetCurrentSettingsGroup());
-
-      gPrefs->Flush();
-   }
-   return true;
-}
-
-bool EffectLoudness::Process()
+bool EffectLoudness::Process(EffectInstance &, EffectSettings &)
 {
    if(mNormalizeTo == kLoudness)
       // LU use 10*log10(...) instead of 20*log10(...)
       // so multiply level by 2 and use standard DB_TO_LINEAR macro.
-      mRatio = DB_TO_LINEAR(TrapDouble(mLUFSLevel*2, MIN_LUFSLevel, MAX_LUFSLevel));
+      mRatio = DB_TO_LINEAR(std::clamp<double>(mLUFSLevel*2, LUFSLevel.min, LUFSLevel.max));
    else // RMS
-      mRatio = DB_TO_LINEAR(TrapDouble(mRMSLevel, MIN_RMSLevel, MAX_RMSLevel));
+      mRatio = DB_TO_LINEAR(std::clamp<double>(mRMSLevel, RMSLevel.min, RMSLevel.max));
 
    // Iterate over each track
    this->CopyInputTracks(); // Set up mOutputTracks.
@@ -288,8 +211,11 @@ bool EffectLoudness::Process()
    return bGoodResult;
 }
 
-void EffectLoudness::PopulateOrExchange(ShuttleGui & S)
+std::unique_ptr<EffectUIValidator> EffectLoudness::PopulateOrExchange(
+   ShuttleGui & S, EffectInstance &, EffectSettingsAccess &,
+   const EffectOutputs *)
 {
+   mUIParent = S.GetParent();
    S.StartVerticalLay(0);
    {
       S.StartMultiColumn(2, wxALIGN_CENTER);
@@ -326,8 +252,8 @@ void EffectLoudness::PopulateOrExchange(ShuttleGui & S)
                            .Validator<FloatingPointValidator<double>>(
                               2, &mLUFSLevel,
                               NumValidatorStyle::ONE_TRAILING_ZERO,
-                              MIN_LUFSLevel, MAX_LUFSLevel )
-                           .AddTextBox( {}, wxT(""), 10);
+                              LUFSLevel.min, LUFSLevel.max )
+                           .AddTextBox( {}, L"", 10);
 
                         /* i18n-hint: LUFS is a particular method for measuring loudnesss */
                         S
@@ -347,8 +273,8 @@ void EffectLoudness::PopulateOrExchange(ShuttleGui & S)
                            .Validator<FloatingPointValidator<double>>(
                               2, &mRMSLevel,
                               NumValidatorStyle::ONE_TRAILING_ZERO,
-                              MIN_RMSLevel, MAX_RMSLevel )
-                           .AddTextBox( {}, wxT(""), 10);
+                              RMSLevel.min, RMSLevel.max )
+                           .AddTextBox( {}, L"", 10);
 
                         S
                            .AddVariableText(XO("dB"), false,
@@ -382,9 +308,10 @@ void EffectLoudness::PopulateOrExchange(ShuttleGui & S)
       S.EndMultiColumn();
    }
    S.EndVerticalLay();
+   return nullptr;
 }
 
-bool EffectLoudness::TransferDataToWindow()
+bool EffectLoudness::TransferDataToWindow(const EffectSettings &)
 {
    if (!mUIParent->TransferDataToWindow())
    {
@@ -397,7 +324,7 @@ bool EffectLoudness::TransferDataToWindow()
    return true;
 }
 
-bool EffectLoudness::TransferDataFromWindow()
+bool EffectLoudness::TransferDataFromWindow(EffectSettings &)
 {
    if (!mUIParent->Validate() || !mUIParent->TransferDataFromWindow())
    {
@@ -590,9 +517,9 @@ void EffectLoudness::UpdateUI()
    {
       mWarning->SetLabel(_("(Maximum 0dB)"));
       // TODO: recalculate layout here
-      EnableApply(false);
+      EffectUIValidator::EnableApply(mUIParent, false);
       return;
    }
    mWarning->SetLabel(wxT(""));
-   EnableApply(true);
+   EffectUIValidator::EnableApply(mUIParent, true);
 }

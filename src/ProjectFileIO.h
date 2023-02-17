@@ -14,7 +14,10 @@ Paul Licameli split from AudacityProject.h
 #include <memory>
 #include <unordered_set>
 
+#include <wx/event.h>
+
 #include "ClientData.h" // to inherit
+#include "Observer.h"
 #include "Prefs.h" // to inherit
 #include "XMLTagHandler.h" // to inherit
 
@@ -42,15 +45,13 @@ using Connection = std::unique_ptr<DBConnection>;
 
 using BlockIDs = std::unordered_set<SampleBlockID>;
 
-// An event processed by the project in the main thread after a checkpoint
-// failure was detected in a worker thread
-wxDECLARE_EXPORTED_EVENT( AUDACITY_DLL_API,
-                          EVT_CHECKPOINT_FAILURE, wxCommandEvent );
-
-// An event processed by the project in the main thread after failure to
-// reconnect to the database, after temporary close and attempted file movement
-wxDECLARE_EXPORTED_EVENT( AUDACITY_DLL_API,
-                          EVT_RECONNECTION_FAILURE, wxCommandEvent );
+//! Subscribe to ProjectFileIO to receive messages; always in idle time
+enum class ProjectFileIOMessage : int {
+   CheckpointFailure,   //!< Failure happened in a worker thread
+   ReconnectionFailure, /*!< Failure to reconnect to the database,
+      after temporary close and attempted file movement */
+   ProjectTitleChange,  //!< A normal occurrence
+};
 
 ///\brief Object associated with a project that manages reading and writing
 /// of Audacity project file formats, and autosave
@@ -59,6 +60,7 @@ class AUDACITY_DLL_API ProjectFileIO final
    , public XMLTagHandler
    , private PrefsListener
    , public std::enable_shared_from_this<ProjectFileIO>
+   , public Observer::Publisher<ProjectFileIOMessage>
 {
 public:
    // Call this static function once before constructing any instances of this
@@ -209,12 +211,12 @@ private:
       const TrackList *tracks = nullptr) /* not override */;
 
    // XMLTagHandler callback methods
-   bool HandleXMLTag(const wxChar *tag, const wxChar **attrs) override;
-   XMLTagHandler *HandleXMLChild(const wxChar *tag) override;
+   bool HandleXMLTag(const std::string_view& tag, const AttributesList &attrs) override;
+   XMLTagHandler *HandleXMLChild(const std::string_view& tag) override;
 
    void UpdatePrefs() override;
 
-   int Exec(const char *query, const ExecCB &callback);
+   int Exec(const char *query, const ExecCB &callback, bool silent = false);
 
    // The opening of the database may be delayed until demanded.
    // Returns a non-null pointer to an open database, or throws an exception
@@ -237,14 +239,13 @@ private:
    // Use a connection that is already open rather than invoke OpenConnection
    void UseConnection(Connection &&conn, const FilePath &filePath);
 
-   bool Query(const char *sql, const ExecCB &callback);
+   bool Query(const char *sql, const ExecCB &callback, bool silent = false);
 
-   bool GetValue(const char *sql, wxString &value);
-   bool GetBlob(const char *sql, wxMemoryBuffer &buffer);
+   bool GetValue(const char *sql, wxString &value, bool silent = false);
+   bool GetValue(const char *sql, int64_t &value, bool silent = false);
 
    bool CheckVersion();
    bool InstallSchema(sqlite3 *db, const char *schema = "main");
-   bool UpgradeSchema();
 
    // Write project or autosave XML (binary) documents
    bool WriteDoc(const char *table, const ProjectSerializer &autosave, const char *schema = "main");
@@ -322,11 +323,6 @@ public:
    wxString sProjName;
    size_t UnnamedCount;
 };
-
-// This event is emitted by the project when there is a change
-// in its title
-wxDECLARE_EXPORTED_EVENT(AUDACITY_DLL_API,
-                         EVT_PROJECT_TITLE_CHANGE, wxCommandEvent);
 
 //! Makes a temporary project that doesn't display on the screen
 class AUDACITY_DLL_API InvisibleTemporaryProject

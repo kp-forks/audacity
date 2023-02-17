@@ -14,12 +14,13 @@ Paul Licameli split from TrackPanel.cpp
 #include "Scrubbing.h"
 #include "TrackView.h"
 
-#include "../../AColor.h"
+#include "AColor.h"
 #include "../../SpectrumAnalyst.h"
-#include "../../NumberScale.h"
-#include "../../Project.h"
-#include "../../ProjectAudioIO.h"
-#include "../../ProjectHistory.h"
+#include "../../LabelTrack.h"
+#include "NumberScale.h"
+#include "Project.h"
+#include "ProjectAudioIO.h"
+#include "ProjectHistory.h"
 #include "../../ProjectSettings.h"
 #include "../../ProjectWindow.h"
 #include "../../RefreshCode.h"
@@ -30,13 +31,11 @@ Paul Licameli split from TrackPanel.cpp
 #include "../../TrackPanel.h"
 #include "../../TrackPanelDrawingContext.h"
 #include "../../TrackPanelMouseEvent.h"
-#include "../../ViewInfo.h"
-#include "../../WaveClip.h"
-#include "../../WaveTrack.h"
+#include "ViewInfo.h"
+#include "WaveClip.h"
+#include "WaveTrack.h"
 #include "../../prefs/SpectrogramSettings.h"
 #include "../../../images/Cursors.h"
-
-#include <wx/event.h>
 
 // Only for definition of SonifyBeginModifyState:
 //#include "../../NoteTrack.h"
@@ -67,9 +66,9 @@ namespace
       wxInt64 trackTopEdge,
       int trackHeight)
    {
-      const SpectrogramSettings &settings = wt->GetSpectrogramSettings();
+      const auto &settings = SpectrogramSettings::Get(*wt);
       float minFreq, maxFreq;
-      wt->GetSpectrumBounds(&minFreq, &maxFreq);
+      SpectrogramBounds::Get(*wt).GetBounds(*wt, minFreq, maxFreq);
       const NumberScale numberScale(settings.GetScale(minFreq, maxFreq));
       const float p = numberScale.ValueToPosition(frequency);
       return trackTopEdge + wxInt64((1.0 - p) * trackHeight);
@@ -93,9 +92,10 @@ namespace
          trackTopEdge + trackHeight - mouseYCoordinate < FREQ_SNAP_DISTANCE)
          return -1;
 
-      const SpectrogramSettings &settings = wt->GetSpectrogramSettings();
+      const auto &settings = SpectrogramSettings::Get(*wt);
       float minFreq, maxFreq;
-      wt->GetSpectrumBounds(&minFreq, &maxFreq);
+      SpectrogramBounds::Get(*wt)
+         .GetBounds(*wt, minFreq, maxFreq);
       const NumberScale numberScale(settings.GetScale(minFreq, maxFreq));
       const double p = double(mouseYCoordinate - trackTopEdge) / trackHeight;
       return numberScale.PositionToValue(1.0 - p);
@@ -117,7 +117,7 @@ namespace
         pTrackView->FindTrack() &&
         pTrackView->FindTrack()->TypeSwitch< bool >(
            [&](const WaveTrack *wt) {
-              const SpectrogramSettings &settings = wt->GetSpectrogramSettings();
+              const auto &settings = SpectrogramSettings::Get(*wt);
               return settings.SpectralSelectionEnabled();
            });
    }
@@ -430,8 +430,12 @@ SelectHandle::SelectHandle
   const TrackList &trackList,
   const TrackPanelMouseState &st, const ViewInfo &viewInfo )
    : mpView{ pTrackView }
+   // Selection dragging can snap to play region boundaries
    , mSnapManager{ std::make_shared<SnapManager>(
-      *trackList.GetOwner(), trackList, viewInfo) }
+      *trackList.GetOwner(), trackList, viewInfo, SnapPointArray{
+         SnapPoint{ viewInfo.playRegion.GetLastActiveStart() },
+         SnapPoint{ viewInfo.playRegion.GetLastActiveEnd() },
+   } ) }
 {
    const wxMouseState &state = st.state;
    mRect = st.rect;
@@ -499,14 +503,14 @@ bool SelectHandle::HasSnap() const
       (IsClicked() ? mSnapEnd : mSnapStart).snappedPoint;
 }
 
-bool SelectHandle::HasEscape() const
+bool SelectHandle::HasEscape(AudacityProject *) const
 {
    return HasSnap() && mUseSnap;
 }
 
 bool SelectHandle::Escape(AudacityProject *project)
 {
-   if (SelectHandle::HasEscape()) {
+   if (SelectHandle::HasEscape(project)) {
       SetUseSnap(false, project);
       return true;
    }
@@ -572,7 +576,7 @@ UIHandle::Result SelectHandle::Click
          WaveClip *const selectedClip = wt->GetClipAtTime(time);
          if (selectedClip) {
             viewInfo.selectedRegion.setTimes(
-               selectedClip->GetOffset(), selectedClip->GetEndTime());
+               selectedClip->GetPlayStartTime(), selectedClip->GetPlayEndTime());
          }
       } );
 
@@ -975,7 +979,7 @@ HitTestPreview SelectHandle::Preview
    if (tip.empty()) {
       tip = XO("Click and drag to select audio");
    }
-   if (HasEscape() && mUseSnap) {
+   if (HasEscape(pProject) && mUseSnap) {
       tip.Join(
 /* i18n-hint: "Snapping" means automatic alignment of selection edges to any nearby label or clip boundaries */
         XO("(snapping)"), wxT(" ")
@@ -1050,7 +1054,7 @@ void SelectHandle::Connect(AudacityProject *pProject)
    mTimerHandler = std::make_shared<TimerHandler>( this, pProject );
 }
 
-class SelectHandle::TimerHandler : public wxEvtHandler
+class SelectHandle::TimerHandler
 {
 public:
    TimerHandler( SelectHandle *pParent, AudacityProject *pProject )
@@ -1058,23 +1062,21 @@ public:
       , mConnectedProject{ pProject }
    {
       if (mConnectedProject)
-         mConnectedProject->Bind(EVT_TRACK_PANEL_TIMER,
-            &SelectHandle::TimerHandler::OnTimer,
-            this);
+         mSubscription = ProjectWindow::Get( *mConnectedProject )
+            .GetPlaybackScroller().Subscribe( *this, &SelectHandle::TimerHandler::OnTimer);
    }
 
    // Receives timer event notifications, to implement auto-scroll
-   void OnTimer(wxCommandEvent &event);
+   void OnTimer(Observer::Message);
 
 private:
    SelectHandle *mParent;
    AudacityProject *mConnectedProject;
+   Observer::Subscription mSubscription;
 };
 
-void SelectHandle::TimerHandler::OnTimer(wxCommandEvent &event)
+void SelectHandle::TimerHandler::OnTimer(Observer::Message)
 {
-   event.Skip();
-
    // AS: If the user is dragging the mouse and there is a track that
    //  has captured the mouse, then scroll the screen, as necessary.
 
@@ -1373,7 +1375,7 @@ void SelectHandle::StartSnappingFreqSelection
    // Use same settings as are now used for spectrogram display,
    // except, shrink the window as needed so we get some answers
 
-   const SpectrogramSettings &settings = pTrack->GetSpectrogramSettings();
+   const auto &settings = SpectrogramSettings::Get(*pTrack);
    auto windowSize = settings.GetFFTLength();
 
    while(windowSize > effectiveLength)
@@ -1441,7 +1443,7 @@ void SelectHandle::SnapCenterOnce
    (SpectrumAnalyst &analyst,
     ViewInfo &viewInfo, const WaveTrack *pTrack, bool up)
 {
-   const SpectrogramSettings &settings = pTrack->GetSpectrogramSettings();
+   const auto &settings = SpectrogramSettings::Get(*pTrack);
    const auto windowSize = settings.GetFFTLength();
    const double rate = pTrack->GetRate();
    const double nyq = rate / 2.0;

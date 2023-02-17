@@ -98,6 +98,7 @@ for registering for changes.
 
 
 
+#include "MemoryX.h"
 #include "Prefs.h"
 #include "ShuttlePrefs.h"
 #include "Theme.h"
@@ -1129,7 +1130,7 @@ void InvisiblePanel::OnPaint( wxPaintEvent & WXUNUSED(event))
    // event.Skip(); // swallow the paint event.
 }
 
-wxPanel * ShuttleGuiBase::StartInvisiblePanel()
+wxPanel * ShuttleGuiBase::StartInvisiblePanel(int border)
 {
    UseUpId();
    if( mShuttleMode != eIsCreating )
@@ -1142,7 +1143,7 @@ wxPanel * ShuttleGuiBase::StartInvisiblePanel()
       wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE)
       );
    SetProportions( 1 );
-   miBorder=0;
+   miBorder = border;
    UpdateSizers();  // adds window in to current sizer.
 
    // create a sizer within the window...
@@ -1592,7 +1593,7 @@ wxRadioButton * ShuttleGuiBase::TieRadioButton()
 }
 
 /// Call this before any TieRadioButton calls.
-void ShuttleGuiBase::StartRadioButtonGroup( const ChoiceSetting &Setting )
+void ShuttleGuiBase::StartRadioButtonGroup(ChoiceSetting &Setting)
 {
    mRadioSymbols = Setting.GetSymbols();
 
@@ -1968,9 +1969,8 @@ wxTextCtrl * ShuttleGuiBase::TieNumericTextBox(
 ///   @param Setting            Encapsulates setting name, internal and visible
 ///                             choice strings, and a designation of one of
 ///                             those as default.
-wxChoice *ShuttleGuiBase::TieChoice(
-   const TranslatableString &Prompt,
-   const ChoiceSetting &choiceSetting )
+wxChoice *ShuttleGuiBase::TieChoice(const TranslatableString &Prompt,
+   ChoiceSetting &choiceSetting)
 {
    // Do this to force any needed migrations first
    choiceSetting.Read();
@@ -1993,7 +1993,7 @@ wxChoice *ShuttleGuiBase::TieChoice(
    if( DoStep(1) ) TempIndex = TranslateToIndex( TempStr, InternalChoices ); // To an index
    if( DoStep(2) ) pChoice = TieChoice( Prompt, TempIndex, Choices );
    if( DoStep(3) ) TempStr = TranslateFromIndex( TempIndex, InternalChoices ); // To a string
-   if( DoStep(3) ) DoDataShuttle( SettingName, WrappedRef ); // Put into Prefs.
+   if( DoStep(3) ) choiceSetting.Write(TempStr); // Put into Prefs.
    return pChoice;
 }
 
@@ -2008,9 +2008,8 @@ wxChoice *ShuttleGuiBase::TieChoice(
 ///   @param Choices            An array of choices that appear on screen.
 ///   @param pInternalChoices   The corresponding values (as an integer array)
 ///                             if null, then use 0, 1, 2, ...
-wxChoice * ShuttleGuiBase::TieNumberAsChoice(
-   const TranslatableString &Prompt,
-   const IntSetting & Setting,
+wxChoice * ShuttleGuiBase::TieNumberAsChoice(const TranslatableString &Prompt,
+   IntSetting &Setting,
    const TranslatableStrings & Choices,
    const std::vector<int> * pInternalChoices,
    int iNoMatchSelector)
@@ -2025,7 +2024,6 @@ wxChoice * ShuttleGuiBase::TieNumberAsChoice(
       for ( int ii = 0; ii < (int)Choices.size(); ++ii )
          InternalChoices.push_back( fn( ii ) );
 
-
    const auto Default = Setting.GetDefault();
 
    miNoMatchSelector = iNoMatchSelector;
@@ -2039,7 +2037,7 @@ wxChoice * ShuttleGuiBase::TieNumberAsChoice(
       defaultIndex = -1;
 
    ChoiceSetting choiceSetting{
-      Setting.GetPath(),
+      Setting,
       {
          ByColumns,
          Choices,
@@ -2048,7 +2046,7 @@ wxChoice * ShuttleGuiBase::TieNumberAsChoice(
       defaultIndex
    };
 
-   return ShuttleGuiBase::TieChoice( Prompt, choiceSetting );
+   return ShuttleGuiBase::TieChoice(Prompt, choiceSetting);
 }
 
 //------------------------------------------------------------------//
@@ -2235,12 +2233,6 @@ void SetIfCreated( wxStaticText *&Var, wxStaticText * Val )
    if( Val != NULL )
       Var = Val;
 };
-
-#ifdef EXPERIMENTAL_TRACK_PANEL
-// Additional includes down here, to make it easier to split this into
-// two files at some later date.
-#include "../extnpanel-src/GuiWaveTrack.h"
-#endif
 
 ShuttleGui::ShuttleGui(
    wxWindow * pParent, teShuttleMode ShuttleMode, bool vertical, wxSize minSize)

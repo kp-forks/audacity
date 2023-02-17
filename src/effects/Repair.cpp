@@ -26,10 +26,8 @@ the audio, rather than actually finding the clicks.
 
 #include <math.h>
 
-#include <wx/intl.h>
-
 #include "InterpolateAudio.h"
-#include "../WaveTrack.h"
+#include "WaveTrack.h"
 #include "../widgets/AudacityMessageBox.h"
 
 #include "LoadEffects.h"
@@ -49,31 +47,31 @@ EffectRepair::~EffectRepair()
 
 // ComponentInterface implementation
 
-ComponentInterfaceSymbol EffectRepair::GetSymbol()
+ComponentInterfaceSymbol EffectRepair::GetSymbol() const
 {
    return Symbol;
 }
 
-TranslatableString EffectRepair::GetDescription()
+TranslatableString EffectRepair::GetDescription() const
 {
    return XO("Sets the peak amplitude of a one or more tracks");
 }
 
 // EffectDefinitionInterface implementation
 
-EffectType EffectRepair::GetType()
+EffectType EffectRepair::GetType() const
 {
    return EffectTypeProcess;
 }
 
-bool EffectRepair::IsInteractive()
+bool EffectRepair::IsInteractive() const
 {
    return false;
 }
 
 // Effect implementation
 
-bool EffectRepair::Process()
+bool EffectRepair::Process(EffectInstance &, EffectSettings &)
 {
    //v This may be too much copying for EffectRepair. To support Cancel, may be able to copy much less.
    //  But for now, Cancel isn't supported without this.
@@ -149,6 +147,14 @@ bool EffectRepair::ProcessOne(int count, WaveTrack * track,
    track->GetFloats(buffer.get(), start, len);
    InterpolateAudio(buffer.get(), len, repairStart, repairLen);
    track->Set((samplePtr)&buffer[repairStart], floatSample,
-              start + repairStart, repairLen);
+      start + repairStart, repairLen,
+      // little repairs shouldn't force dither on rendering:
+      narrowestSampleFormat
+   );
    return !TrackProgress(count, 1.0); // TrackProgress returns true on Cancel.
+}
+
+bool EffectRepair::NeedsDither() const
+{
+   return false;
 }

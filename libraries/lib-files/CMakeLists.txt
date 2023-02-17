@@ -17,6 +17,8 @@ set( SOURCES
    FileIO.h
    FileNames.cpp
    FileNames.h
+   PathList.cpp
+   PathList.h
    PlatformCompatibility.cpp
    PlatformCompatibility.h
    TempDirectory.cpp
@@ -26,8 +28,6 @@ set( SOURCES
 set( LIBRARIES
    lib-exceptions-interface
    lib-preferences-interface
-   PRIVATE
-   wxBase
 )
 audacity_library( lib-files "${SOURCES}" "${LIBRARIES}"
    "" ""

@@ -17,16 +17,16 @@ Paul Licameli
 #include "WaveformPrefs.h"
 
 #include "GUIPrefs.h"
-#include "GUISettings.h"
+#include "Decibels.h"
 
 #include <wx/checkbox.h>
 #include <wx/choice.h>
 
-#include "../Project.h"
+#include "Project.h"
 
 #include "../TrackPanel.h"
 #include "../ShuttleGui.h"
-#include "../WaveTrack.h"
+#include "WaveTrack.h"
 #include "../tracks/playabletrack/wavetrack/ui/WaveTrackView.h"
 #include "../tracks/playabletrack/wavetrack/ui/WaveTrackViewConstants.h"
 
@@ -39,7 +39,7 @@ WaveformPrefs::WaveformPrefs(wxWindow * parent, wxWindowID winid,
 , mPopulating(false)
 {
    if (mWt) {
-      WaveformSettings &settings = wt->GetWaveformSettings();
+      auto &settings = WaveformSettings::Get(*wt);
       mDefaulted = (&WaveformSettings::defaults() == &settings);
       mTempSettings = settings;
    }
@@ -56,12 +56,12 @@ WaveformPrefs::~WaveformPrefs()
 {
 }
 
-ComponentInterfaceSymbol WaveformPrefs::GetSymbol()
+ComponentInterfaceSymbol WaveformPrefs::GetSymbol() const
 {
    return WAVEFORM_PREFS_PLUGIN_SYMBOL;
 }
 
-TranslatableString WaveformPrefs::GetDescription()
+TranslatableString WaveformPrefs::GetDescription() const
 {
    return XO("Preferences for Waveforms");
 }
@@ -168,10 +168,9 @@ bool WaveformPrefs::Commit()
    if (mWt) {
       for (auto channel : TrackList::Channels(mWt)) {
          if (mDefaulted)
-            channel->SetWaveformSettings({});
+            WaveformSettings::Set(*channel, {});
          else {
-            WaveformSettings &settings =
-               channel->GetWaveformSettings();
+            auto &settings = WaveformSettings::Get(*channel);
             settings = mTempSettings;
          }
       }

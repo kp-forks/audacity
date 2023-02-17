@@ -16,11 +16,10 @@ namespace BasicUI are no-ops.
 set( SOURCES
    BasicUI.cpp
    BasicUI.h
+   BasicUIPoint.h
 )
 set( LIBRARIES
    lib-strings-interface
-   PRIVATE
-   wxBase
 )
 audacity_library( lib-basic-ui "${SOURCES}" "${LIBRARIES}"
    "" ""

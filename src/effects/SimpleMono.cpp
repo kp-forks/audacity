@@ -22,11 +22,11 @@
 
 #include "SimpleMono.h"
 
-#include "../WaveTrack.h"
+#include "WaveTrack.h"
 
 #include <math.h>
 
-bool EffectSimpleMono::Process()
+bool EffectSimpleMono::Process(EffectInstance &, EffectSettings &)
 {
    //Iterate over each track
    this->CopyInputTracks(); // Set up mOutputTracks.

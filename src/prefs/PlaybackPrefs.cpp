@@ -37,12 +37,12 @@ PlaybackPrefs::~PlaybackPrefs()
 {
 }
 
-ComponentInterfaceSymbol PlaybackPrefs::GetSymbol()
+ComponentInterfaceSymbol PlaybackPrefs::GetSymbol() const
 {
    return PLAYBACK_PREFS_PLUGIN_SYMBOL;
 }
 
-TranslatableString PlaybackPrefs::GetDescription()
+TranslatableString PlaybackPrefs::GetDescription() const
 {
    return XO("Preferences for Playback");
 }
@@ -146,7 +146,8 @@ void PlaybackPrefs::PopulateOrExchange(ShuttleGui & S)
    {
       S.StartVerticalLay();
       {
-         S.TieCheckBox(XXO("&Vari-Speed Play"), {"/AudioIO/VariSpeedPlay", true});
+         //Removing Vari-Speed Play from PlaybackPrefs
+         //S.TieCheckBox(XXO("&Vari-Speed Play"), {"/AudioIO/VariSpeedPlay", true});
          S.TieCheckBox(XXO("&Micro-fades"), {"/AudioIO/Microfades", false});
          S.TieCheckBox(XXO("Always scrub un&pinned"),
             {UnpinnedScrubbingPreferenceKey(),

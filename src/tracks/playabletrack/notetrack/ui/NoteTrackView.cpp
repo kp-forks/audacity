@@ -17,14 +17,15 @@ Paul Licameli split from TrackPanel.cpp
 #include "NoteTrackVRulerControls.h"
 #include "../../../../NoteTrack.h"
 
-#include "../../../../AColor.h"
-#include "../../../../AllThemeResources.h"
+#include "AColor.h"
+#include "AllThemeResources.h"
 #include "../../../../HitTestResult.h"
-#include "../../../../Theme.h"
+#include "Theme.h"
+#include "../../../../TrackArt.h"
 #include "../../../../TrackArtist.h"
 #include "../../../../TrackPanelDrawingContext.h"
 #include "../../../../TrackPanelMouseEvent.h"
-#include "../../../../ViewInfo.h"
+#include "ViewInfo.h"
 #include "../../../ui/SelectHandle.h"
 #include "StretchHandle.h"
 #include "NoteTrackAffordanceControls.h"
@@ -749,5 +750,13 @@ void NoteTrackView::Draw(
       DrawNoteTrack(context, nt.get(), rect, muted, selected);
    }
    CommonTrackView::Draw( context, rect, iPass );
+}
+
+#include "SyncLock.h"
+
+using GetNoteTrackSyncLockPolicy =
+   GetSyncLockPolicy::Override< const NoteTrack >;
+DEFINE_ATTACHED_VIRTUAL_OVERRIDE(GetNoteTrackSyncLockPolicy) {
+   return [](auto &) { return SyncLockPolicy::Grouped; };
 }
 #endif

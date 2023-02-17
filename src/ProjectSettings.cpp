@@ -14,18 +14,22 @@ Paul Licameli split from AudacityProject.cpp
 
 #include "AudioIOBase.h"
 #include "Project.h"
-#include "prefs/QualitySettings.h"
+#include "QualitySettings.h"
 #include "widgets/NumericTextCtrl.h"
 #include "prefs/TracksBehaviorsPrefs.h"
 #include "XMLWriter.h"
+#include "XMLTagHandler.h"
 
 wxDEFINE_EVENT(EVT_PROJECT_SETTINGS_CHANGE, wxCommandEvent);
 
 namespace {
-   void Notify( AudacityProject &project, ProjectSettings::EventCode code )
+   void Notify(
+      AudacityProject &project, ProjectSettings::EventCode code,
+      long previousValue )
    {
       wxCommandEvent e{ EVT_PROJECT_SETTINGS_CHANGE };
       e.SetInt( static_cast<int>( code ) );
+      e.SetExtraLong( previousValue );
       project.ProcessEvent( e );
    }
 }
@@ -55,10 +59,6 @@ ProjectSettings::ProjectSettings(AudacityProject &project)
       NumericConverter::TIME,
       gPrefs->Read(wxT("/SelectionFormat"), wxT("")))
 }
-, mAudioTimeFormat{ NumericTextCtrl::LookupFormat(
-   NumericConverter::TIME,
-   gPrefs->Read(wxT("/AudioTimeFormat"), wxT("hh:mm:ss")))
-}
 , mFrequencySelectionFormatName{ NumericTextCtrl::LookupFormat(
    NumericConverter::FREQUENCY,
    gPrefs->Read(wxT("/FrequencySelectionFormatName"), wxT("")) )
@@ -67,19 +67,13 @@ ProjectSettings::ProjectSettings(AudacityProject &project)
    NumericConverter::BANDWIDTH,
    gPrefs->Read(wxT("/BandwidthSelectionFormatName"), wxT("")) )
 }
+, mAudioTimeFormat{ NumericTextCtrl::LookupFormat(
+   NumericConverter::TIME,
+   gPrefs->Read(wxT("/AudioTimeFormat"), wxT("hh:mm:ss")))
+}
 , mSnapTo( gPrefs->Read(wxT("/SnapTo"), SNAP_OFF) )
+, mCurrentBrushRadius ( 5 )
 {
-   int intRate = 0;
-   bool wasDefined = QualitySettings::DefaultSampleRate.Read( &intRate );
-   mRate = intRate;
-   if ( !wasDefined ) {
-      // The default given above can vary with host/devices. So unless there is
-      // an entry for the default sample rate in audacity.cfg, Audacity can open
-      // with a rate which is different from the rate with which it closed.
-      // See bug 1879.
-      QualitySettings::DefaultSampleRate.Write( mRate );
-      gPrefs->Flush();
-   }
    gPrefs->Read(wxT("/GUI/SyncLockTracks"), &mIsSyncLocked, false);
 
    bool multiToolActive = false;
@@ -166,20 +160,6 @@ const NumericFormatSymbol & ProjectSettings::GetAudioTimeFormat() const
    return mAudioTimeFormat;
 }
 
-double ProjectSettings::GetRate() const
-{
-   return mRate;
-}
-
-void ProjectSettings::SetRate(double rate)
-{
-   auto &project = mProject;
-   if (rate != mRate) {
-      mRate = rate;
-      Notify( project, ChangedProjectRate );
-   }
-}
-
 void ProjectSettings::SetSnapTo(int snap)
 {
    mSnapTo = snap;
@@ -188,6 +168,13 @@ void ProjectSettings::SetSnapTo(int snap)
 int ProjectSettings::GetSnapTo() const
 {
    return mSnapTo;
+}
+
+void ProjectSettings::SetTool(int tool) {
+   if (auto oldValue = mCurrentTool; oldValue != tool) {
+      mCurrentTool = tool;
+      Notify( mProject, ChangedTool, oldValue );
+   }
 }
 
 bool ProjectSettings::IsSyncLocked() const
@@ -202,16 +189,15 @@ bool ProjectSettings::IsSyncLocked() const
 void ProjectSettings::SetSyncLock(bool flag)
 {
    auto &project = mProject;
-   if (flag != mIsSyncLocked) {
+   if (auto oldValue = mIsSyncLocked; flag != oldValue) {
       mIsSyncLocked = flag;
-      Notify( project, ChangedSyncLock );
+      Notify( project, ChangedSyncLock, oldValue );
    }
 }
 
-static ProjectFileIORegistry::WriterEntry entry {
+static ProjectFileIORegistry::AttributeWriterEntry entry {
 [](const AudacityProject &project, XMLWriter &xmlFile){
    auto &settings = ProjectSettings::Get(project);
-   xmlFile.WriteAttr(wxT("rate"), settings.GetRate());
    xmlFile.WriteAttr(wxT("snapto"), settings.GetSnapTo() ? wxT("on") : wxT("off"));
    xmlFile.WriteAttr(wxT("selectionformat"),
                      settings.GetSelectionFormat().Internal());
@@ -225,28 +211,24 @@ static ProjectFileIORegistry::WriterEntry entry {
 static ProjectFileIORegistry::AttributeReaderEntries entries {
 // Just a pointer to function, but needing overload resolution as non-const:
 (ProjectSettings& (*)(AudacityProject &)) &ProjectSettings::Get, {
-   { L"rate", [](auto &settings, auto value){
-      double rate;
-      Internat::CompatibleToDouble(value, &rate);
-      settings.SetRate( rate );
-   } },
-
    // PRL:  The following have persisted as per-project settings for long.
    // Maybe that should be abandoned.  Enough to save changes in the user
    // preference file.
-   { L"snapto", [](auto &settings, auto value){
-      settings.SetSnapTo(wxString(value) == wxT("on") ? true : false);
+   { "snapto", [](auto &settings, auto value){
+      settings.SetSnapTo(value.ToWString() == wxT("on") ? true : false);
    } },
-   { L"selectionformat", [](auto &settings, auto value){
-      settings.SetSelectionFormat(
-         NumericConverter::LookupFormat( NumericConverter::TIME, value) );
+   { "selectionformat", [](auto &settings, auto value){
+      settings.SetSelectionFormat(NumericConverter::LookupFormat(
+              NumericConverter::TIME, value.ToWString()));
    } },
-   { L"frequencyformat", [](auto &settings, auto value){
+   { "frequencyformat", [](auto &settings, auto value){
       settings.SetFrequencySelectionFormatName(
-         NumericConverter::LookupFormat( NumericConverter::FREQUENCY, value ) );
+              NumericConverter::LookupFormat(
+                 NumericConverter::FREQUENCY, value.ToWString()));
    } },
-   { L"bandwidthformat", [](auto &settings, auto value){
+   { "bandwidthformat", [](auto &settings, auto value){
       settings.SetBandwidthSelectionFormatName(
-         NumericConverter::LookupFormat( NumericConverter::BANDWIDTH, value ) );
+              NumericConverter::LookupFormat(
+                 NumericConverter::BANDWIDTH, value.ToWString()));
    } },
 } };

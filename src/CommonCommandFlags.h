@@ -44,22 +44,15 @@ extern AUDACITY_DLL_API const ReservedCommandFlag
 
 extern AUDACITY_DLL_API const ReservedCommandFlag
    &LabelTracksExistFlag(),
-   &UnsavedChangesFlag(),
    &UndoAvailableFlag(),
    &RedoAvailableFlag(),
    &ZoomInAvailableFlag(),
    &ZoomOutAvailableFlag(),
-   &PlayRegionLockedFlag(),  //msmeyer
-   &PlayRegionNotLockedFlag(),  //msmeyer
    &WaveTracksExistFlag(),
-   &NoteTracksExistFlag(),  //gsw
-   &NoteTracksSelectedFlag(),  //gsw
    &IsNotSyncLockedFlag(),  //awd
    &IsSyncLockedFlag(),  //awd
    &NotMinimizedFlag(), // prl
    &PausedFlag(), // jkc
-   &PlayableTracksExistFlag(),
-   &AudioTracksSelectedFlag(),
    &NoAutoSelect() // jkc
 ;
 

@@ -6,6 +6,8 @@ type.
 ]]#
 
 set( SOURCES
+   XMLAttributeValueView.cpp
+   XMLAttributeValueView.h
    XMLFileReader.cpp
    XMLFileReader.h
    XMLMethodRegistry.cpp
@@ -18,9 +20,8 @@ set( SOURCES
 )
 set( LIBRARIES
    lib-files-interface
+   lib-string-utils-interface
    expat::expat
-   PRIVATE
-   wxBase
 )
 audacity_library( lib-xml "${SOURCES}" "${LIBRARIES}"
    "" ""

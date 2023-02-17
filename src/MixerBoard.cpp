@@ -43,15 +43,17 @@
 #include "ProjectFileIO.h"
 #include "ProjectSettings.h"
 #include "ProjectWindow.h"
+#include "ProjectWindows.h"
 #include "SelectUtilities.h"
 #include "Theme.h"
-#include "TrackPanel.h" // for EVT_TRACK_PANEL_TIMER
+#include "TrackPanel.h"
 #include "TrackUtilities.h"
 #include "UndoManager.h"
 #include "WaveTrack.h"
 
 #include "widgets/AButton.h"
-#include "widgets/Meter.h"
+#include "widgets/MeterPanel.h"
+#include "widgets/auStaticText.h"
 
 
 #include "../images/MusicalInstruments.h"
@@ -63,7 +65,7 @@
 
 #include "commands/CommandManager.h"
 
-#define AudacityMixerBoardTitle XO("Audacity Mixer Board%s")
+#define AudacityMixerBoardTitle XO("Audacity Mixer%s")
 
 // class MixerTrackSlider
 
@@ -600,6 +602,9 @@ void MixerTrackCluster::UpdateMeter(const double t0, const double t1)
    //}
    //
 
+   // PRL: TODO:  don't fetch from wave tracks at calculated times, for update
+   // of the meter display, but instead consult PlaybackPolicy
+
    const auto pTrack = GetWave();
    auto startSample = (sampleCount)((pTrack->GetRate() * t0) + 0.5);
    auto scnFrames = (sampleCount)((pTrack->GetRate() * (t1 - t0)) + 0.5);
@@ -917,34 +922,27 @@ MixerBoard::MixerBoard(AudacityProject* pProject,
    mTracks = &TrackList::Get( *mProject );
 
    // Events from the project don't propagate directly to this other frame, so...
-   mProject->Bind(EVT_TRACK_PANEL_TIMER,
-      &MixerBoard::OnTimer,
-      this);
+   mPlaybackScrollerSubscription =
+   ProjectWindow::Get( *mProject ).GetPlaybackScroller()
+      .Subscribe(*this, &MixerBoard::OnTimer);
 
-   mTracks->Bind(EVT_TRACKLIST_SELECTION_CHANGE,
-      &MixerBoard::OnTrackChanged,
-      this);
+   mTrackPanelSubscription =
+   mTracks->Subscribe([this](const TrackListEvent &event){
+      switch (event.mType) {
+      case TrackListEvent::SELECTION_CHANGE:
+      case TrackListEvent::TRACK_DATA_CHANGE:
+         OnTrackChanged(event); break;
+      case TrackListEvent::PERMUTED:
+      case TrackListEvent::ADDITION:
+      case TrackListEvent::DELETION:
+         OnTrackSetChanged(); break;
+      default:
+         break;
+      }
+   });
 
-   mTracks->Bind(EVT_TRACKLIST_PERMUTED,
-      &MixerBoard::OnTrackSetChanged,
-      this);
-
-   mTracks->Bind(EVT_TRACKLIST_ADDITION,
-      &MixerBoard::OnTrackSetChanged,
-      this);
-
-   mTracks->Bind(EVT_TRACKLIST_DELETION,
-      &MixerBoard::OnTrackSetChanged,
-      this);
-
-   mTracks->Bind(EVT_TRACKLIST_TRACK_DATA_CHANGE,
-      &MixerBoard::OnTrackChanged,
-      this);
-
-   wxTheApp->Connect(EVT_AUDIOIO_PLAYBACK,
-      wxCommandEventHandler(MixerBoard::OnStartStop),
-      NULL,
-      this);
+   mAudioIOSubscription =
+      AudioIO::Get()->Subscribe(*this, &MixerBoard::OnStartStop);
 }
 
 
@@ -1157,6 +1155,8 @@ void MixerBoard::UpdateMeters(const double t1, const bool bLoopedPlay)
       return;
    }
 
+   // PRL:  TODO:  reexamine the assumptions below
+
    // In loopedPlay mode, at the end of the loop, mPrevT1 is set to
    // selection end, so the next t1 will be less, but we do want to
    // keep updating the meters.
@@ -1307,7 +1307,7 @@ void MixerBoard::LoadMusicalInstruments()
    wxMemoryDC dc;
 
    for (const auto &data : table) {
-      auto bmp = std::make_unique<wxBitmap>(data.bitmap,24);
+      auto bmp = std::make_unique<wxBitmap>(data.bitmap);
       dc.SelectObject(*bmp);
       AColor::Bevel(dc, false, bev);
       mMusicalInstruments.push_back(std::make_unique<MusicalInstrument>(
@@ -1338,7 +1338,7 @@ void MixerBoard::OnSize(wxSizeEvent &evt)
    this->RefreshTrackClusters(true);
 }
 
-void MixerBoard::OnTimer(wxCommandEvent &event)
+void MixerBoard::OnTimer(Observer::Message)
 {
    // PRL 12 Jul 2015:  Moved the below (with comments) out of TrackPanel::OnTimer.
 
@@ -1361,15 +1361,10 @@ void MixerBoard::OnTimer(wxCommandEvent &event)
             == PlayMode::loopedPlay)
       );
    }
-
-   // Let other listeners get the notification
-   event.Skip();
 }
 
-void MixerBoard::OnTrackChanged(TrackListEvent &evt)
+void MixerBoard::OnTrackChanged(const TrackListEvent &evt)
 {
-   evt.Skip();
-
    auto pTrack = evt.mpTrack.lock();
    auto pPlayable = dynamic_cast<PlayableTrack*>( pTrack.get() );
    if ( pPlayable ) {
@@ -1380,19 +1375,17 @@ void MixerBoard::OnTrackChanged(TrackListEvent &evt)
    }
 }
 
-void MixerBoard::OnTrackSetChanged(wxEvent &evt)
+void MixerBoard::OnTrackSetChanged()
 {
-   evt.Skip();
    mUpToDate = false;
    UpdateTrackClusters();
    Refresh();
 }
 
-void MixerBoard::OnStartStop(wxCommandEvent &evt)
+void MixerBoard::OnStartStop(AudioIOEvent evt)
 {
-   evt.Skip();
-   bool start = evt.GetInt();
-   ResetMeters( start );
+   if (evt.type == AudioIOEvent::PLAYBACK)
+      ResetMeters( evt.on );
 }
 
 // class MixerBoardFrame
@@ -1415,12 +1408,11 @@ MixerBoardFrame::MixerBoardFrame(AudacityProject* parent)
    , mProject(parent)
 {
    SetWindowTitle();
-   auto titleChanged = [&](wxCommandEvent &evt)
-   {
-      SetWindowTitle();
-      evt.Skip();
-   };
-   wxTheApp->Bind( EVT_PROJECT_TITLE_CHANGE, titleChanged );
+   mTitleChangeSubscription = ProjectFileIO::Get(*parent)
+      .Subscribe([this](ProjectFileIOMessage message){
+         if (message == ProjectFileIOMessage::ProjectTitleChange)
+            SetWindowTitle();
+      });
 
    mMixerBoard = safenew MixerBoard(parent, this, wxDefaultPosition, kDefaultSize);
 
@@ -1514,40 +1506,44 @@ void MixerBoardFrame::SetWindowTitle()
 
 namespace {
 
+const ReservedCommandFlag&
+   PlayableTracksExistFlag() { static ReservedCommandFlag flag{
+      [](const AudacityProject &project){
+         auto &tracks = TrackList::Get( project );
+         return
+#ifdef EXPERIMENTAL_MIDI_OUT
+            !tracks.Any<const NoteTrack>().empty()
+         ||
+#endif
+            !tracks.Any<const WaveTrack>().empty()
+         ;
+      }
+   }; return flag; }
+
 // Mixer board window attached to each project is built on demand by:
-AudacityProject::AttachedWindows::RegisteredFactory sMixerBoardKey{
+AttachedWindows::RegisteredFactory sMixerBoardKey{
    []( AudacityProject &parent ) -> wxWeakRef< wxWindow > {
       return safenew MixerBoardFrame( &parent );
    }
 };
 
 // Define our extra menu item that invokes that factory
-struct Handler : CommandHandlerObject {
-   void OnMixerBoard(const CommandContext &context)
-   {
-      auto &project = context.project;
+void OnMixerBoard(const CommandContext &context)
+{
+   auto &project = context.project;
 
-      auto mixerBoardFrame = &project.AttachedWindows::Get( sMixerBoardKey );
-      mixerBoardFrame->Show();
-      mixerBoardFrame->Raise();
-      mixerBoardFrame->SetFocus();
-   }
-};
-
-CommandHandlerObject &findCommandHandler(AudacityProject &) {
-   // Handler is not stateful.  Doesn't need a factory registered with
-   // AudacityProject.
-   static Handler instance;
-   return instance;
+   auto mixerBoardFrame = &GetAttachedWindows(project).Get(sMixerBoardKey);
+   mixerBoardFrame->Show();
+   mixerBoardFrame->Raise();
+   mixerBoardFrame->SetFocus();
 }
 
 // Register that menu item
 
 using namespace MenuTable;
 AttachedItem sAttachment{ wxT("View/Windows"),
-   ( FinderScope{ findCommandHandler },
-      Command( wxT("MixerBoard"), XXO("&Mixer Board..."), &Handler::OnMixerBoard,
-         PlayableTracksExistFlag()) )
+   Command( wxT("MixerBoard"), XXO("&Mixer"), OnMixerBoard,
+      PlayableTracksExistFlag())
 };
 
 }

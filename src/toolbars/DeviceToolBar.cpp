@@ -18,6 +18,8 @@
 #include "DeviceToolBar.h"
 #include "ToolManager.h"
 
+#include <thread>
+
 // For compilers that support precompilation, includes "wx/wx.h".
 #include <wx/wxprec.h>
 
@@ -26,8 +28,6 @@
 #ifndef WX_PRECOMP
 #include <wx/app.h>
 #include <wx/choice.h>
-#include <wx/event.h>
-#include <wx/intl.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/statbmp.h>
@@ -37,18 +37,17 @@
 
 #include "../TrackPanel.h"
 
-#include "../AColor.h"
-#include "../AllThemeResources.h"
-#include "../AudioIOBase.h"
-#include "../ImageManipulation.h"
+#include "AColor.h"
+#include "AllThemeResources.h"
+#include "AudioIOBase.h"
+#include "ImageManipulation.h"
 #include "../KeyboardCapture.h"
 #include "Prefs.h"
-#include "../Project.h"
+#include "Project.h"
 #include "../ShuttleGui.h"
 #include "../widgets/Grabber.h"
-#include "../DeviceManager.h"
+#include "DeviceManager.h"
 #include "../widgets/AudacityMessageBox.h"
-#include "../widgets/Grabber.h"
 
 #if wxUSE_ACCESSIBILITY
 #include "../widgets/WindowAccessible.h"
@@ -65,28 +64,38 @@ BEGIN_EVENT_TABLE(DeviceToolBar, ToolBar)
    EVT_COMMAND(wxID_ANY, EVT_CAPTURE_KEY, DeviceToolBar::OnCaptureKey)
 END_EVENT_TABLE()
 
-static int DeviceToolbarPrefsID()
+int DeviceToolbarPrefsID()
 {
    static int value = wxNewId();
    return value;
 }
 
+Identifier DeviceToolBar::ID()
+{
+   return wxT("Device");
+}
+
 //Standard constructor
 DeviceToolBar::DeviceToolBar( AudacityProject &project )
-: ToolBar( project, DeviceBarID, XO("Device"), wxT("Device"), true )
+: ToolBar( project, XO("Device"), ID(), true )
 {
-   wxTheApp->Bind( EVT_RESCANNED_DEVICES,
-      &DeviceToolBar::OnRescannedDevices, this );
+   mSubscription = DeviceManager::Instance()->Subscribe(
+      *this, &DeviceToolBar::OnRescannedDevices );
 }
 
 DeviceToolBar::~DeviceToolBar()
 {
 }
 
+bool DeviceToolBar::ShownByDefault() const
+{
+   return false;
+}
+
 DeviceToolBar &DeviceToolBar::Get( AudacityProject &project )
 {
    auto &toolManager = ToolManager::Get( project );
-   return *static_cast<DeviceToolBar*>( toolManager.GetToolBar(DeviceBarID) );
+   return *static_cast<DeviceToolBar*>(toolManager.GetToolBar(ID()));
 }
 
 const DeviceToolBar &DeviceToolBar::Get( const AudacityProject &project )
@@ -284,7 +293,7 @@ void DeviceToolBar::UpdatePrefs()
    }
 
    devName = AudioIOPlaybackDevice.Read();
-   sourceName = gPrefs->Read(wxT("/AudioIO/PlaybackSource"), wxT(""));
+   sourceName = AudioIOPlaybackSource.Read();
    if (sourceName.empty())
       desc = devName;
    else
@@ -553,11 +562,11 @@ void DeviceToolBar::FillInputChannels()
    mInputChannels->SetMinSize(wxSize(50, wxDefaultCoord));
 }
 
-void DeviceToolBar::OnRescannedDevices( wxCommandEvent &event )
+void DeviceToolBar::OnRescannedDevices(DeviceChangeMessage m)
 {
-   event.Skip();
    // Hosts may have disappeared or appeared so a complete repopulate is needed.
-   RefillCombos();
+   if (m == DeviceChangeMessage::Rescan)
+      RefillCombos();
 }
 
 //return 1 if host changed, 0 otherwise.
@@ -600,9 +609,9 @@ void DeviceToolBar::SetDevices(const DeviceSourceMap *in, const DeviceSourceMap 
    if (out) {
       AudioIOPlaybackDevice.Write(out->deviceString);
       if (out->totalSources >= 1) {
-         gPrefs->Write(wxT("/AudioIO/PlaybackSource"), out->sourceString);
+         AudioIOPlaybackSource.Write(out->sourceString);
       } else {
-         gPrefs->Write(wxT("/AudioIO/PlaybackSource"), wxT(""));
+         AudioIOPlaybackSource.Reset();
       }
       gPrefs->Flush();
    }
@@ -675,8 +684,10 @@ void DeviceToolBar::OnChoice(wxCommandEvent &event)
       if (gAudioIO->IsMonitoring())
       {
          gAudioIO->StopStream();
-         while (gAudioIO->IsBusy())
-            wxMilliSleep(100);
+         while (gAudioIO->IsBusy()) {
+            using namespace std::chrono;
+            std::this_thread::sleep_for(100ms);
+         }
       }
       gAudioIO->HandleDeviceChange();
    }
@@ -744,7 +755,7 @@ void DeviceToolBar::ShowComboDialog(wxChoice *combo, const TranslatableString &t
 #endif
 }
 
-static RegisteredToolbarFactory factory{ DeviceBarID,
+static RegisteredToolbarFactory factory{
    []( AudacityProject &project ){
       return ToolBar::Holder{ safenew DeviceToolBar{ project } }; }
 };
@@ -753,7 +764,70 @@ namespace {
 AttachedToolBarMenuItem sAttachment{
    /* i18n-hint: Clicking this menu item shows the toolbar
       that manages devices */
-   DeviceBarID, wxT("ShowDeviceTB"), XXO("&Device Toolbar")
+   DeviceToolBar::ID(), wxT("ShowDeviceTB"), XXO("&Device Toolbar")
 };
 }
 
+
+// Define some related menu items
+#include "../commands/CommandContext.h"
+#include "../CommonCommandFlags.h"
+
+namespace {
+void OnInputDevice(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto &tb = DeviceToolBar::Get( project );
+   tb.ShowInputDialog();
+}
+
+void OnOutputDevice(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto &tb = DeviceToolBar::Get( project );
+   tb.ShowOutputDialog();
+}
+
+void OnInputChannels(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto &tb = DeviceToolBar::Get( project );
+   tb.ShowChannelsDialog();
+}
+
+void OnAudioHost(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto &tb = DeviceToolBar::Get( project );
+   tb.ShowHostDialog();
+}
+
+// Menu definitions
+
+using namespace MenuTable;
+// Under /MenuBar/Optional/Extra/Part1
+BaseItemSharedPtr ExtraDeviceMenu()
+{
+   static BaseItemSharedPtr menu{
+   Menu( wxT("Device"), XXO("De&vice"),
+      Command( wxT("InputDevice"), XXO("Change &Recording Device..."),
+         OnInputDevice,
+         AudioIONotBusyFlag(), wxT("Shift+I") ),
+      Command( wxT("OutputDevice"), XXO("Change &Playback Device..."),
+         OnOutputDevice,
+         AudioIONotBusyFlag(), wxT("Shift+O") ),
+      Command( wxT("AudioHost"), XXO("Change Audio &Host..."), OnAudioHost,
+         AudioIONotBusyFlag(), wxT("Shift+H") ),
+      Command( wxT("InputChannels"), XXO("Change Recording Cha&nnels..."),
+         OnInputChannels,
+         AudioIONotBusyFlag(), wxT("Shift+N") )
+   ) };
+   return menu;
+}
+
+AttachedItem sAttachment2{
+   Placement{ wxT("Optional/Extra/Part1"), { OrderingHint::End } },
+   Shared( ExtraDeviceMenu() )
+};
+
+}

@@ -20,7 +20,7 @@
 class wxChoice;
 class wxTextCtrl;
 class ShuttleGui;
-enum sampleFormat : unsigned;
+enum class sampleFormat : unsigned;
 enum DitherType : unsigned;
 
 #define QUALITY_PREFS_PLUGIN_SYMBOL ComponentInterfaceSymbol{ XO("Quality") }
@@ -30,8 +30,8 @@ class AUDACITY_DLL_API QualityPrefs final : public PrefsPanel
  public:
    QualityPrefs(wxWindow * parent, wxWindowID winid);
    virtual ~QualityPrefs();
-   ComponentInterfaceSymbol GetSymbol() override;
-   TranslatableString GetDescription() override;
+   ComponentInterfaceSymbol GetSymbol() const override;
+   TranslatableString GetDescription() const override;
 
    bool Commit() override;
    ManualPageID HelpPageName() override;

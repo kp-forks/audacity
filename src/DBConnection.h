@@ -39,14 +39,16 @@ struct DBConnectionErrors
 class DBConnection
 {
 public:
-   // Type of function invoked in the main thread after detection of
-   // checkpoint failure, which might have been in a worker thread
    using CheckpointFailureCallback = std::function<void()>;
 
    DBConnection(
       const std::weak_ptr<AudacityProject> &pProject,
       const std::shared_ptr<DBConnectionErrors> &pErrors,
-      CheckpointFailureCallback callback);
+      CheckpointFailureCallback callback /*!<
+         Invoked in the main thread in idle time after detection of
+         checkpoint failure, which might have been in a worker thread
+      */
+   );
    ~DBConnection();
 
    int Open(const FilePath fileName);
@@ -58,7 +60,8 @@ public:
    ) const;
 
    int SafeMode(const char *schema = "main");
-   int FastMode(const char *schema = "main");
+   int FastMode(const char* schema = "main");
+   int SetPageSize(const char* schema = "main");
 
    bool Assign(sqlite3 *handle);
    sqlite3 *Detach();
@@ -76,8 +79,8 @@ public:
       LoadSampleBlock,
       InsertSampleBlock,
       DeleteSampleBlock,
-      GetRootPage,
-      GetDBPage
+      GetSampleBlockSize,
+      GetAllSampleBlocksSize
    };
    sqlite3_stmt *Prepare(enum StatementID id, const char *sql);
 
@@ -124,30 +127,6 @@ private:
 
    // Bypass transactions if database will be deleted after close
    bool mBypass;
-};
-
-//! RAII for a database transaction, possibly nested
-/*! Make a savepoint (a transaction, possibly nested) with the given name;
-    roll it back at destruction time, unless an explicit Commit() happened first.
-    Commit() must not be called again after one successful call.
-    An exception is thrown from the constructor if the transaction cannot open.
- */
-class AUDACITY_DLL_API TransactionScope
-{
-public:
-   TransactionScope(DBConnection &connection, const char *name);
-   ~TransactionScope();
-
-   bool Commit();
-
-private:
-   bool TransactionStart(const wxString &name);
-   bool TransactionCommit(const wxString &name);
-   bool TransactionRollback(const wxString &name);
-
-   DBConnection &mConnection;
-   bool mInTrans;
-   wxString mName;
 };
 
 using Connection = std::unique_ptr<DBConnection>;

@@ -12,8 +12,8 @@ Paul Licameli split from TrackPanel.cpp
 #include "TimeTrackControls.h"
 
 #include "../../../HitTestResult.h"
-#include "../../../Project.h"
-#include "../../../ProjectHistory.h"
+#include "Project.h"
+#include "ProjectHistory.h"
 #include "../../../RefreshCode.h"
 #include "../../../TimeTrack.h"
 #include "../../../widgets/PopupMenuTable.h"
@@ -47,11 +47,6 @@ TimeTrackMenuTable &TimeTrackMenuTable::Instance()
 void TimeTrackMenuTable::InitUserData(void *pUserData)
 {
    mpData = static_cast<CommonTrackControls::InitMenuData*>(pUserData);
-}
-
-void TimeTrackMenuTable::DestroyMenu()
-{
-   mpData = nullptr;
 }
 
 void TimeTrackMenuTable::OnSetTimeTrackRange(wxCommandEvent & /*event*/)

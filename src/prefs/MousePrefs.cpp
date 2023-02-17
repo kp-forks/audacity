@@ -36,7 +36,6 @@
 #include "MousePrefs.h"
 
 #include <wx/defs.h>
-#include <wx/intl.h>
 #include <wx/listctrl.h>
 
 #include "Prefs.h"
@@ -72,12 +71,12 @@ MousePrefs::~MousePrefs()
 {
 }
 
-ComponentInterfaceSymbol MousePrefs::GetSymbol()
+ComponentInterfaceSymbol MousePrefs::GetSymbol() const
 {
    return MOUSE_PREFS_PLUGIN_SYMBOL;
 }
 
-TranslatableString MousePrefs::GetDescription()
+TranslatableString MousePrefs::GetDescription() const
 {
    return XO("Preferences for Mouse");
 }

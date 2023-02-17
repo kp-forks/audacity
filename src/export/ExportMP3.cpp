@@ -69,30 +69,29 @@
 #include <wx/checkbox.h>
 #include <wx/dynlib.h>
 #include <wx/ffile.h>
-#include <wx/intl.h>
 #include <wx/log.h>
 #include <wx/mimetype.h>
 #include <wx/radiobut.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
-#include <wx/timer.h>
-#include <wx/utils.h>
 #include <wx/window.h>
 
 #include "FileNames.h"
 #include "float_cast.h"
-#include "../Mix.h"
+#include "Mix.h"
 #include "Prefs.h"
+#include "ProjectRate.h"
 #include "../ProjectSettings.h"
 #include "../ProjectWindow.h"
 #include "../SelectFile.h"
 #include "../ShuttleGui.h"
-#include "../Tags.h"
-#include "../Track.h"
+#include "Tags.h"
+#include "Track.h"
 #include "../widgets/HelpSystem.h"
 #include "../widgets/AudacityMessageBox.h"
 #include "../widgets/ProgressDialog.h"
 #include "wxFileNameWrapper.h"
+#include "Project.h"
 
 #include "Export.h"
 
@@ -401,9 +400,11 @@ void ExportMP3Options::PopulateOrExchange(ShuttleGui & S)
                      break;
                }
 
+               IntSetting Setting{ L"/FileFormats/MP3Bitrate", defrate };
+
                mRate = S.Id(ID_QUALITY).TieNumberAsChoice(
                   XXO("Quality"),
-                  { wxT("/FileFormats/MP3Bitrate"), defrate },
+                  Setting,
                   *choices,
                   codes
                );
@@ -924,7 +925,7 @@ MP3Exporter::MP3Exporter()
 // We could use #defines rather than this variable.
 // The idea of the variable is that if we wanted, we could allow
 // a dynamic override of the library, e.g. with a newer faster version,
-// or to fix CVEs in the underlying librray.
+// or to fix CVEs in the underlying library.
 // for now though the 'variable' is a constant.
 #ifdef MP3_EXPORT_BUILT_IN
    mLibIsExternal = false;
@@ -1700,7 +1701,7 @@ public:
 
    void OptionsCreate(ShuttleGui &S, int format) override;
    ProgressResult Export(AudacityProject *project,
-               std::unique_ptr<ProgressDialog> &pDialog,
+               std::unique_ptr<BasicUI::ProgressDialog> &pDialog,
                unsigned channels,
                const wxFileNameWrapper &fName,
                bool selectedOnly,
@@ -1758,7 +1759,7 @@ int ExportMP3::SetNumExportChannels()
 
 
 ProgressResult ExportMP3::Export(AudacityProject *project,
-                       std::unique_ptr<ProgressDialog> &pDialog,
+                       std::unique_ptr<BasicUI::ProgressDialog> &pDialog,
                        unsigned channels,
                        const wxFileNameWrapper &fName,
                        bool selectionOnly,
@@ -1768,7 +1769,7 @@ ProgressResult ExportMP3::Export(AudacityProject *project,
                        const Tags *metadata,
                        int WXUNUSED(subformat))
 {
-   int rate = lrint( ProjectSettings::Get( *project ).GetRate());
+   int rate = lrint( ProjectRate::Get( *project ).GetRate());
 #ifndef DISABLE_DYNAMIC_LOADING_LAME
    wxWindow *parent = ProjectWindow::Find( project );
 #endif // DISABLE_DYNAMIC_LOADING_LAME
@@ -1833,7 +1834,6 @@ ProgressResult ExportMP3::Export(AudacityProject *project,
       bitrate = fixRateValues[ brate ];
       exporter.SetMode(MODE_ABR);
       exporter.SetBitrate(bitrate);
-
       if (bitrate > 160) {
          lowrate = 32000;
       }
@@ -1858,11 +1858,32 @@ ProgressResult ExportMP3::Export(AudacityProject *project,
    // Verify sample rate
    if (!make_iterator_range( sampRates ).contains( rate ) ||
       (rate < lowrate) || (rate > highrate)) {
-      rate = AskResample(bitrate, rate, lowrate, highrate);
-      if (rate == 0) {
-         return ProgressResult::Cancelled;
-      }
-   }
+        // Force valid sample rate in macros.
+		if (project->mBatchMode) {
+			if (!make_iterator_range( sampRates ).contains( rate )) {
+				auto const bestRateIt = std::lower_bound(sampRates.begin(),
+				sampRates.end(), rate);
+				rate = (bestRateIt == sampRates.end()) ? highrate : *bestRateIt;
+			}
+			if (rate < lowrate) {
+				rate = lowrate;
+			}
+			else if (rate > highrate) {
+				rate = highrate;
+			}
+		}
+		// else validate or prompt
+		else {
+			if (!make_iterator_range( sampRates ).contains( rate ) ||
+				(rate < lowrate) || (rate > highrate)) {
+				rate = AskResample(bitrate, rate, lowrate, highrate);
+			}
+			if (rate == 0) {
+				return ProgressResult::Cancelled;
+       
+			}
+		}
+	}
 
    // Set the channel mode
    if (forceMono) {
@@ -1947,11 +1968,9 @@ ProgressResult ExportMP3::Export(AudacityProject *project,
       auto &progress = *pDialog;
 
       while (updateResult == ProgressResult::Success) {
-         auto blockLen = mixer->Process(inSamples);
-
-         if (blockLen == 0) {
+         auto blockLen = mixer->Process();
+         if (blockLen == 0)
             break;
-         }
 
          float *mixed = (float *)mixer->GetBuffer();
 
@@ -1987,7 +2006,7 @@ ProgressResult ExportMP3::Export(AudacityProject *project,
             break;
          }
 
-         updateResult = progress.Update(mixer->MixGetCurrentTime() - t0, t1 - t0);
+         updateResult = progress.Poll(mixer->MixGetCurrentTime() - t0, t1 - t0);
       }
    }
 

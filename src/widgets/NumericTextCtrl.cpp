@@ -169,10 +169,12 @@ different formats.
 #include "NumericTextCtrl.h"
 
 #include "SampleCount.h"
-#include "../AllThemeResources.h"
-#include "../AColor.h"
+#include "AllThemeResources.h"
+#include "AColor.h"
+#include "BasicMenu.h"
 #include "../KeyboardCapture.h"
-#include "../Theme.h"
+#include "Theme.h"
+#include "wxWidgetsWindowPlacement.h"
 
 #include <algorithm>
 #include <math.h>
@@ -183,9 +185,7 @@ different formats.
 #include <wx/wx.h>
 #include <wx/dcbuffer.h>
 #include <wx/font.h>
-#include <wx/intl.h>
 #include <wx/menu.h>
-#include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/tooltip.h>
 #include <wx/toplevel.h>
@@ -1771,7 +1771,11 @@ void NumericTextCtrl::OnContext(wxContextMenuEvent &event)
       }
    }
 
-   PopupMenu(&menu, wxPoint(0, 0));
+   menu.Bind(wxEVT_MENU, [](auto&){});
+   BasicMenu::Handle{ &menu }.Popup(
+      wxWidgetsWindowPlacement{ this },
+      { 0, 0 }
+   );
 
    // This used to be in an EVT_MENU() event handler, but GTK
    // is sensitive to what is done within the handler if the
@@ -2024,6 +2028,7 @@ void NumericTextCtrl::OnKeyDown(wxKeyEvent &event)
       if (def && def->IsEnabled()) {
          wxCommandEvent cevent(wxEVT_COMMAND_BUTTON_CLICKED,
                                def->GetId());
+         cevent.SetEventObject( def );
          GetParent()->GetEventHandler()->ProcessEvent(cevent);
       }
    }

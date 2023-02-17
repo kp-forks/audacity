@@ -16,9 +16,11 @@
 
 
 #include "TracksBehaviorsPrefs.h"
+#include "ViewInfo.h"
 
 #include "Prefs.h"
 #include "../ShuttleGui.h"
+#include "WaveTrack.h"
 
 TracksBehaviorsPrefs::TracksBehaviorsPrefs(wxWindow * parent, wxWindowID winid)
 /* i18n-hint: i.e. the behaviors of tracks */
@@ -31,12 +33,12 @@ TracksBehaviorsPrefs::~TracksBehaviorsPrefs()
 {
 }
 
-ComponentInterfaceSymbol TracksBehaviorsPrefs::GetSymbol()
+ComponentInterfaceSymbol TracksBehaviorsPrefs::GetSymbol() const
 {
    return TRACKS_BEHAVIORS_PREFS_PLUGIN_SYMBOL;
 }
 
-TranslatableString TracksBehaviorsPrefs::GetDescription()
+TranslatableString TracksBehaviorsPrefs::GetDescription() const
 {
    return XO("Preferences for TracksBehaviors");
 }
@@ -44,12 +46,6 @@ TranslatableString TracksBehaviorsPrefs::GetDescription()
 ManualPageID TracksBehaviorsPrefs::HelpPageName()
 {
    return "Tracks_Behaviors_Preferences";
-}
-
-const wxChar *TracksBehaviorsPrefs::ScrollingPreferenceKey()
-{
-   static auto string = wxT("/GUI/ScrollBeyondZero");
-   return string;
 }
 
 void TracksBehaviorsPrefs::Populate()
@@ -88,9 +84,9 @@ void TracksBehaviorsPrefs::PopulateOrExchange(ShuttleGui & S)
       S.TieCheckBox(XXO("Enable &dragging selection edges"),
                     {wxT("/GUI/AdjustSelectionEdges"),
                      true});
-      S.TieCheckBox(XXO("Editing a clip can &move other clips"),
-                    {wxT("/GUI/EditClipCanMove"),
-                     true});
+      S
+         .TieCheckBox(XXO("Editing a clip can &move other clips"),
+            EditClipsCanMove);
       S.TieCheckBox(XXO("\"Move track focus\" c&ycles repeatedly through tracks"),
                     {wxT("/GUI/CircularTrackNavigation"),
                      false});
@@ -102,8 +98,7 @@ void TracksBehaviorsPrefs::PopulateOrExchange(ShuttleGui & S)
                      false});
 #ifdef EXPERIMENTAL_SCROLLING_LIMITS
       S.TieCheckBox(XXO("Enable scrolling left of &zero"),
-                    {ScrollingPreferenceKey(),
-                     ScrollingPreferenceDefault()});
+                    ScrollingPreference);
 #endif
       S.TieCheckBox(XXO("Advanced &vertical zooming"),
                     {wxT("/GUI/VerticalZooming"),
@@ -125,6 +120,8 @@ bool TracksBehaviorsPrefs::Commit()
 {
    ShuttleGui S(this, eIsSavingToPrefs);
    PopulateOrExchange(S);
+   EditClipsCanMove.Invalidate();
+   ScrollingPreference.Invalidate();
 
    return true;
 }
@@ -140,19 +137,4 @@ PrefsPanel::Registration sAttachment{ "TracksBehaviors",
    // Place it at a lower tree level
    { "Tracks" }
 };
-}
-
-// Bug 825 is essentially that SyncLock requires EditClipsCanMove.
-// SyncLock needs rethinking, but meanwhile this function
-// fixes the issues of Bug 825 by allowing clips to move when in
-// SyncLock.
-bool GetEditClipsCanMove()
-{
-   bool mIsSyncLocked;
-   gPrefs->Read(wxT("/GUI/SyncLockTracks"), &mIsSyncLocked, false);
-   if( mIsSyncLocked )
-      return true;
-   bool editClipsCanMove;
-   gPrefs->Read(wxT("/GUI/EditClipCanMove"), &editClipsCanMove, true);
-   return editClipsCanMove;
 }

@@ -25,22 +25,21 @@
 #include <wx/choice.h>
 #include <wx/defs.h>
 #include <wx/brush.h>
-#include <wx/image.h>
-#include <wx/intl.h>
 #endif // WX_PRECOMP
 
-#include "../Envelope.h"
+#include "Envelope.h"
 
-#include "../AllThemeResources.h"
-#include "../AudioIO.h"
-#include "../ImageManipulation.h"
+#include "AllThemeResources.h"
+#include "AudioIO.h"
+#include "ImageManipulation.h"
 #include "../KeyboardCapture.h"
-#include "../Project.h"
+#include "NoteTrack.h"
+#include "Project.h"
+#include "ProjectAudioIO.h"
 #include "../ProjectAudioManager.h"
-#include "../ProjectSettings.h"
-#include "../Envelope.h"
-#include "../ViewInfo.h"
-#include "../WaveTrack.h"
+#include "Envelope.h"
+#include "ViewInfo.h"
+#include "WaveTrack.h"
 #include "../widgets/AButton.h"
 #include "../widgets/ASlider.h"
 #include "../tracks/ui/Scrubbing.h"
@@ -92,10 +91,14 @@ BEGIN_EVENT_TABLE(TranscriptionToolBar, ToolBar)
 END_EVENT_TABLE()
    ;   //semicolon enforces  proper automatic indenting in emacs.
 
+Identifier TranscriptionToolBar::ID()
+{
+   return wxT("Transcription");
+}
+
 ////Standard Constructor
 TranscriptionToolBar::TranscriptionToolBar( AudacityProject &project )
-: ToolBar( project,
-   TranscriptionBarID, XO("Play-at-Speed"), wxT("Transcription"), true )
+: ToolBar( project, XO("Play-at-Speed"), ID(), true )
 {
    SetPlaySpeed( 1.0 * 100.0 );
 #ifdef EXPERIMENTAL_VOICE_DETECTION
@@ -107,10 +110,26 @@ TranscriptionToolBar::~TranscriptionToolBar()
 {
 }
 
+bool TranscriptionToolBar::ShownByDefault() const
+{
+   return
+#ifdef EXPERIMENTAL_DA
+      false
+#else
+      true
+#endif
+   ;
+}
+
+ToolBar::DockID TranscriptionToolBar::DefaultDockID() const
+{
+   return BotDockID;
+}
+
 TranscriptionToolBar &TranscriptionToolBar::Get( AudacityProject &project )
 {
    auto &toolManager = ToolManager::Get( project );
-   return *static_cast<TranscriptionToolBar*>( toolManager.GetToolBar(TranscriptionBarID) );
+   return *static_cast<TranscriptionToolBar*>(toolManager.GetToolBar(ID()));
 }
 
 const TranscriptionToolBar &TranscriptionToolBar::Get( const AudacityProject &project )
@@ -156,7 +175,7 @@ void TranscriptionToolBar::Create(wxWindow * parent)
 void TranscriptionToolBar::SetPlaySpeed( double value )
 {
    mPlaySpeed = value;
-   ProjectSettings::Get( mProject ).SetPlaySpeed( GetPlaySpeed() );
+   ProjectAudioIO::Get( mProject ).SetPlaySpeed( GetPlaySpeed() );
 }
 
 /// This is a convenience function that allows for button creation in
@@ -206,7 +225,8 @@ void TranscriptionToolBar::Populate()
 
    AddButton(this, bmpPlay,     bmpPlayDisabled,   TTB_PlaySpeed,
       XO("Play at selected speed"));
-   MakeAlternateImages(bmpLoop, bmpLoopDisabled, TTB_PlaySpeed, 1);
+   // 3.1.0 abandoned distinct images for Shift
+   MakeAlternateImages(bmpPlay, bmpPlayDisabled, TTB_PlaySpeed, 1);
    MakeAlternateImages(bmpCutPreview, bmpCutPreviewDisabled, TTB_PlaySpeed, 2);
    mButtons[TTB_PlaySpeed]->FollowModifierKeys();
 
@@ -299,7 +319,7 @@ void TranscriptionToolBar::EnableDisableButtons()
    auto gAudioIO = AudioIO::Get();
    bool canStopAudioStream = (!gAudioIO->IsStreamActive() ||
            gAudioIO->IsMonitoring() ||
-           gAudioIO->GetOwningProject() == p );
+           gAudioIO->GetOwningProject().get() == p );
    bool recording = gAudioIO->GetNumCaptureChannels() > 0;
 
    // Only interested in audio type tracks
@@ -341,8 +361,9 @@ void TranscriptionToolBar::RegenerateTooltips()
       CommandID commandName2;
       TranslatableString untranslatedLabel2;
    } table[] = {
-      { TTB_PlaySpeed,   wxT("PlayAtSpeed"),    XO("Play-at-Speed"),
-      wxT("PlayAtSpeedLooped"),    XO("Looped-Play-at-Speed")
+      { TTB_PlaySpeed,
+         wxT("PlayAtSpeedLooped"),    XO("Play-at-Speed"),
+         wxT("PlayAtSpeed"),    XO("Play-at-Speed Once"),
       },
    };
 
@@ -471,7 +492,7 @@ void TranscriptionToolBar::GetSamples(
 #define TIMETRACK_MAX 10.0
 
 // Come here from button clicks, or commands
-void TranscriptionToolBar::PlayAtSpeed(bool looped, bool cutPreview)
+void TranscriptionToolBar::PlayAtSpeed(bool newDefault, bool cutPreview)
 {
    // Can't do anything without an active project
    AudacityProject *p = &mProject;
@@ -488,9 +509,10 @@ void TranscriptionToolBar::PlayAtSpeed(bool looped, bool cutPreview)
    if ( TrackList::Get( *p ).Any< NoteTrack >() )
       bFixedSpeedPlay = true;
 
-   // Scrubbing only supports straight through play.
-   // So if looped or cutPreview, we have to fall back to fixed speed.
-   bFixedSpeedPlay = bFixedSpeedPlay || looped || cutPreview;
+   // If cutPreview, we have to fall back to fixed speed.
+   if (newDefault)
+      cutPreview = false;
+   bFixedSpeedPlay = bFixedSpeedPlay || cutPreview;
    if (bFixedSpeedPlay)
    {
       // Create a BoundedEnvelope if we haven't done so already
@@ -523,38 +545,33 @@ void TranscriptionToolBar::PlayAtSpeed(bool looped, bool cutPreview)
    // Start playing
    if (playRegion.GetStart() < 0)
       return;
-   if (bFixedSpeedPlay)
+
    {
-      auto options = DefaultPlayOptions( *p );
-      options.playLooped = looped;
+      auto options = ProjectAudioIO::GetDefaultOptions(*p, newDefault);
       // No need to set cutPreview options.
-      options.envelope = mEnvelope.get();
+      options.envelope = bFixedSpeedPlay ? mEnvelope.get() : nullptr;
+      options.variableSpeed = !bFixedSpeedPlay;
       auto mode =
          cutPreview ? PlayMode::cutPreviewPlay
-         : options.playLooped ? PlayMode::loopedPlay
+         : newDefault ? PlayMode::loopedPlay
          : PlayMode::normalPlay;
       projectAudioManager.PlayPlayRegion(
          SelectedRegion(playRegion.GetStart(), playRegion.GetEnd()),
             options,
             mode);
    }
-   else
-   {
-      auto &scrubber = Scrubber::Get( *p );
-      scrubber.StartSpeedPlay(GetPlaySpeed(),
-         playRegion.GetStart(), playRegion.GetEnd());
-   }
 }
 
 // Come here from button clicks only
-void TranscriptionToolBar::OnPlaySpeed(wxCommandEvent & WXUNUSED(event))
+void TranscriptionToolBar::OnPlaySpeed(wxCommandEvent & event)
 {
    auto button = mButtons[TTB_PlaySpeed];
 
    // Let control have precedence over shift
    const bool cutPreview = mButtons[TTB_PlaySpeed]->WasControlDown();
    const bool looped = !cutPreview &&
-      button->WasShiftDown();
+      !button->WasShiftDown();
+   OnSpeedSlider(event);
    PlayAtSpeed(looped, cutPreview);
 }
 
@@ -832,7 +849,7 @@ void TranscriptionToolBar::OnCalibrate(wxCommandEvent & WXUNUSED(event))
 }
 
 #include "../LabelTrack.h"
-#include "../ProjectHistory.h"
+#include "ProjectHistory.h"
 #include "../TrackPanel.h"
 #include "../TrackPanelAx.h"
 #include "../tracks/labeltrack/ui/LabelTrackView.h"
@@ -1053,7 +1070,7 @@ void TranscriptionToolBar::AdjustPlaySpeed(float adj)
    OnSpeedSlider(e);
 }
 
-static RegisteredToolbarFactory factory{ TranscriptionBarID,
+static RegisteredToolbarFactory factory{
    []( AudacityProject &project ){
       return ToolBar::Holder{ safenew TranscriptionToolBar{ project } }; }
 };
@@ -1062,7 +1079,115 @@ namespace {
 AttachedToolBarMenuItem sAttachment{
    /* i18n-hint: Clicking this menu item shows the toolbar
       for transcription (currently just vary play speed) */
-   TranscriptionBarID, wxT("ShowTranscriptionTB"), XXO("Pla&y-at-Speed Toolbar")
+   TranscriptionToolBar::ID(),
+   wxT("ShowTranscriptionTB"), XXO("Pla&y-at-Speed Toolbar")
 };
 }
 
+// Menu handler functions
+
+#include "../CommonCommandFlags.h"
+
+namespace {
+void OnPlayAtSpeed(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto tb = &TranscriptionToolBar::Get( project );
+
+   if (tb) {
+      tb->PlayAtSpeed(false, false);
+   }
+}
+
+void OnPlayAtSpeedLooped(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto tb = &TranscriptionToolBar::Get( project );
+
+   if (tb) {
+      tb->PlayAtSpeed(true, false);
+   }
+}
+
+void OnPlayAtSpeedCutPreview(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto tb = &TranscriptionToolBar::Get( project );
+
+   if (tb) {
+      tb->PlayAtSpeed(false, true);
+   }
+}
+
+void OnSetPlaySpeed(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto tb = &TranscriptionToolBar::Get( project );
+
+   if (tb) {
+      tb->ShowPlaySpeedDialog();
+   }
+}
+
+void OnPlaySpeedInc(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto tb = &TranscriptionToolBar::Get( project );
+
+   if (tb) {
+      tb->AdjustPlaySpeed(0.1f);
+   }
+}
+
+void OnPlaySpeedDec(const CommandContext &context)
+{
+   auto &project = context.project;
+   auto tb = &TranscriptionToolBar::Get( project );
+
+   if (tb) {
+      tb->AdjustPlaySpeed(-0.1f);
+   }
+}
+
+using namespace MenuTable;
+
+BaseItemSharedPtr ExtraPlayAtSpeedMenu()
+{
+   static BaseItemSharedPtr menu{
+      Menu( wxT("PlayAtSpeed"), XXO("&Play-at-Speed") ) };
+   return menu;
+}
+
+AttachedItem sAttachment2{
+   wxT("Optional/Extra/Part1"),
+   Shared( ExtraPlayAtSpeedMenu() )
+};
+
+BaseItemSharedPtr ExtraPlayAtSpeedItems()
+{
+   static BaseItemSharedPtr items{
+   Items( "",
+      /* i18n-hint: 'Normal Play-at-Speed' doesn't loop or cut preview. */
+      Command( wxT("PlayAtSpeedLooped"), XXO("&Play-at-Speed"),
+         OnPlayAtSpeedLooped, CaptureNotBusyFlag() ),
+      Command( wxT("PlayAtSpeed"), XXO("Play-at-Speed &Once"),
+         OnPlayAtSpeed, CaptureNotBusyFlag() ),
+      Command( wxT("PlayAtSpeedCutPreview"), XXO("Play C&ut Preview-at-Speed"),
+         OnPlayAtSpeedCutPreview, CaptureNotBusyFlag() ),
+      Command( wxT("SetPlaySpeed"), XXO("Ad&just Playback Speed..."),
+         OnSetPlaySpeed, CaptureNotBusyFlag() ),
+      Command( wxT("PlaySpeedInc"), XXO("&Increase Playback Speed"),
+         OnPlaySpeedInc, CaptureNotBusyFlag() ),
+      Command( wxT("PlaySpeedDec"), XXO("&Decrease Playback Speed"),
+         OnPlaySpeedDec, CaptureNotBusyFlag() )
+   ) };
+   return items;
+}
+
+AttachedItem sAttachment3{
+   Placement{ wxT("Optional/Extra/Part1/PlayAtSpeed"),
+     OrderingHint::Begin },
+   Shared( ExtraPlayAtSpeedItems() )
+};
+
+}

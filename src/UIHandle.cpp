@@ -31,12 +31,17 @@ bool UIHandle::Rotate(bool)
    return false;
 }
 
-bool UIHandle::HasEscape() const
+bool UIHandle::HasEscape(AudacityProject *) const
 {
    return false;
 }
 
 bool UIHandle::Escape(AudacityProject *)
+{
+   return false;
+}
+
+bool UIHandle::HandlesRightClick()
 {
    return false;
 }

@@ -12,7 +12,7 @@ Paul Licameli split from TrackPanel.cpp
 #define __AUDACITY_SELECT_HANDLE__
 
 #include "../../UIHandle.h"
-#include "../../SelectedRegion.h"
+#include "SelectedRegion.h"
 #include "../../Snap.h"
 
 #include <vector>
@@ -54,7 +54,7 @@ public:
    void Enter(bool forward, AudacityProject *pProject) override;
 
    bool HasSnap() const;
-   bool HasEscape() const override;
+   bool HasEscape(AudacityProject *pProject) const override;
 
    bool Escape(AudacityProject *pProject) override;
 

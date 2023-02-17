@@ -27,16 +27,14 @@ namespace soundtouch { class SoundTouch; }
 
 
 class TimeWarper;
+class LabelTrack;
+class NoteTrack;
 class WaveTrack;
 
-class EffectSoundTouch /* not final */ : public Effect
+class EffectSoundTouch /* not final */ : public StatefulEffect
 {
 public:
    
-   // Effect implementation
-
-   void End() override;
-
    // EffectSoundTouch implementation
 
 #ifdef USE_MIDI
@@ -53,7 +51,6 @@ protected:
                               const TimeWarper &warper,
                               bool preserveLength);
 
-   std::unique_ptr<soundtouch::SoundTouch> mSoundTouch;
    double mCurT0;
    double mCurT1;
 
@@ -62,15 +59,17 @@ private:
 #ifdef USE_MIDI
    bool ProcessNoteTrack(NoteTrack *track, const TimeWarper &warper);
 #endif
-   bool ProcessOne(
+   bool ProcessOne(soundtouch::SoundTouch *pSoundTouch,
       WaveTrack * t, sampleCount start, sampleCount end,
       const TimeWarper &warper);
-   bool ProcessStereo(WaveTrack* leftTrack, WaveTrack* rightTrack,
-                     sampleCount start, sampleCount end,
-                      const TimeWarper &warper);
-   bool ProcessStereoResults(const size_t outputCount,
-                              WaveTrack* outputLeftTrack,
-                              WaveTrack* outputRightTrack);
+   bool ProcessStereo(soundtouch::SoundTouch *pSoundTouch,
+      WaveTrack* leftTrack, WaveTrack* rightTrack,
+      sampleCount start, sampleCount end,
+      const TimeWarper &warper);
+   bool ProcessStereoResults(soundtouch::SoundTouch *pSoundTouch,
+      const size_t outputCount,
+      WaveTrack* outputLeftTrack,
+      WaveTrack* outputRightTrack);
    void Finalize(WaveTrack* orig, WaveTrack* out, const TimeWarper &warper);
 
    bool   mPreserveLength;

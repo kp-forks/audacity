@@ -39,21 +39,18 @@
 #include <wx/defs.h>
 #include <wx/textctrl.h>
 #include <wx/dynlib.h>
-#include <wx/utils.h>
-#include <wx/timer.h>
 #include <wx/window.h>
 #include <wx/log.h>
-#include <wx/intl.h>
 #include <wx/stream.h>
 
 #include "Export.h"
 #include "FileIO.h"
-#include "../Mix.h"
+#include "Mix.h"
 #include "Prefs.h"
-#include "../ProjectSettings.h"
+#include "ProjectRate.h"
 #include "../ShuttleGui.h"
-#include "../Tags.h"
-#include "../Track.h"
+#include "Tags.h"
+#include "Track.h"
 #include "../widgets/AudacityMessageBox.h"
 #include "../widgets/ProgressDialog.h"
 
@@ -156,19 +153,15 @@ ExportMP2Options::~ExportMP2Options()
 ///
 void ExportMP2Options::PopulateOrExchange(ShuttleGui & S)
 {
+   IntSetting Setting{ L"/FileFormats/MP2Bitrate", 160 };
    S.StartVerticalLay();
    {
       S.StartHorizontalLay(wxCENTER);
       {
          S.StartMultiColumn(2, wxCENTER);
          {
-            S.TieNumberAsChoice(
-               XXO("Bit Rate:"),
-               {wxT("/FileFormats/MP2Bitrate"),
-                160},
-               BitRateNames,
-               &BitRateValues
-            );
+            S.TieNumberAsChoice(XXO("Bit Rate:"), Setting,
+               BitRateNames, &BitRateValues);
          }
          S.EndMultiColumn();
       }
@@ -210,7 +203,7 @@ public:
 
    void OptionsCreate(ShuttleGui &S, int format) override;
    ProgressResult Export(AudacityProject *project,
-               std::unique_ptr<ProgressDialog> &pDialog,
+               std::unique_ptr<BasicUI::ProgressDialog> &pDialog,
                unsigned channels,
                const wxFileNameWrapper &fName,
                bool selectedOnly,
@@ -241,15 +234,14 @@ ExportMP2::ExportMP2()
 }
 
 ProgressResult ExportMP2::Export(AudacityProject *project,
-   std::unique_ptr<ProgressDialog> &pDialog,
+   std::unique_ptr<BasicUI::ProgressDialog> &pDialog,
    unsigned channels, const wxFileNameWrapper &fName,
    bool selectionOnly, double t0, double t1, MixerSpec *mixerSpec, const Tags *metadata,
    int WXUNUSED(subformat))
 {
-   const auto &settings = ProjectSettings::Get( *project );
    bool stereo = (channels == 2);
    long bitrate = gPrefs->Read(wxT("/FileFormats/MP2Bitrate"), 160);
-   double rate = settings.GetRate();
+   double rate = ProjectRate::Get(*project).GetRate();
    const auto &tracks = TrackList::Get( *project );
 
    wxLogNull logNo;             /* temporarily disable wxWidgets error messages */
@@ -319,8 +311,7 @@ ProgressResult ExportMP2::Export(AudacityProject *project,
       auto &progress = *pDialog;
 
       while (updateResult == ProgressResult::Success) {
-         auto pcmNumSamples = mixer->Process(pcmBufferSize);
-
+         auto pcmNumSamples = mixer->Process();
          if (pcmNumSamples == 0)
             break;
 
@@ -346,7 +337,7 @@ ProgressResult ExportMP2::Export(AudacityProject *project,
             return ProgressResult::Cancelled;
          }
 
-         updateResult = progress.Update(mixer->MixGetCurrentTime() - t0, t1 - t0);
+         updateResult = progress.Poll(mixer->MixGetCurrentTime() - t0, t1 - t0);
       }
    }
 

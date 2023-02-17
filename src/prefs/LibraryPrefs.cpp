@@ -20,7 +20,6 @@ MP3 and FFmpeg encoding libraries.
 #include "LibraryPrefs.h"
 
 #include <wx/defs.h>
-#include <wx/button.h>
 #include <wx/stattext.h>
 
 #include "../FFmpeg.h"
@@ -33,14 +32,10 @@ MP3 and FFmpeg encoding libraries.
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#define ID_MP3_FIND_BUTTON          7001
-#define ID_MP3_DOWN_BUTTON          7002
 #define ID_FFMPEG_FIND_BUTTON       7003
 #define ID_FFMPEG_DOWN_BUTTON       7004
 
 BEGIN_EVENT_TABLE(LibraryPrefs, PrefsPanel)
-   EVT_BUTTON(ID_MP3_FIND_BUTTON, LibraryPrefs::OnMP3FindButton)
-   EVT_BUTTON(ID_MP3_DOWN_BUTTON, LibraryPrefs::OnMP3DownButton)
    EVT_BUTTON(ID_FFMPEG_FIND_BUTTON, LibraryPrefs::OnFFmpegFindButton)
    EVT_BUTTON(ID_FFMPEG_DOWN_BUTTON, LibraryPrefs::OnFFmpegDownButton)
 END_EVENT_TABLE()
@@ -56,12 +51,12 @@ LibraryPrefs::~LibraryPrefs()
 {
 }
 
-ComponentInterfaceSymbol LibraryPrefs::GetSymbol()
+ComponentInterfaceSymbol LibraryPrefs::GetSymbol() const
 {
    return LIBRARY_PREFS_PLUGIN_SYMBOL;
 }
 
-TranslatableString LibraryPrefs::GetDescription()
+TranslatableString LibraryPrefs::GetDescription() const
 {
    return XO("Preferences for Library");
 }
@@ -157,20 +152,6 @@ void LibraryPrefs::SetMP3VersionText(bool prompt)
    mMP3Version->SetValue(GetMP3Version(this, prompt));
 }
 
-/// Opens a file-finder dialog so that the user can
-/// tell us where the MP3 library is.
-void LibraryPrefs::OnMP3FindButton(wxCommandEvent & WXUNUSED(event))
-{
-   SetMP3VersionText(true);
-}
-
-/// Opens help on downloading a suitable MP3 library is.
-void LibraryPrefs::OnMP3DownButton(wxCommandEvent & WXUNUSED(event))
-{
-   // Modal help dialogue required here
-   HelpSystem::ShowHelp(this, L"FAQ:Installing_the_LAME_MP3_Encoder", true);
-}
-
 void LibraryPrefs::SetFFmpegVersionText()
 {
    mFFmpegVersion->SetValue(GetFFmpegVersion());
@@ -179,15 +160,12 @@ void LibraryPrefs::SetFFmpegVersionText()
 void LibraryPrefs::OnFFmpegFindButton(wxCommandEvent & WXUNUSED(event))
 {
 #ifdef USE_FFMPEG
-   FFmpegLibs* FFmpegLibsPtr = PickFFmpegLibs();
    bool showerrs =
 #if defined(_DEBUG)
       true;
 #else
       false;
 #endif
-
-   FFmpegLibsPtr->FreeLibs();
    // Load the libs ('true' means that all errors will be shown)
    bool locate = !LoadFFmpeg(showerrs);
 
@@ -205,13 +183,11 @@ void LibraryPrefs::OnFFmpegFindButton(wxCommandEvent & WXUNUSED(event))
 
    if (locate) {
       // Show "Locate FFmpeg" dialog
-      FFmpegLibsPtr->FindLibs(this);
-      FFmpegLibsPtr->FreeLibs();
+      FindFFmpegLibs(this);
       LoadFFmpeg(showerrs);
    }
-   SetFFmpegVersionText();
 
-   DropFFmpegLibs();
+   SetFFmpegVersionText();
 #endif
 }
 

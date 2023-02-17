@@ -20,20 +20,19 @@
 
 #include "GUIPrefs.h"
 
-#include <wx/app.h>
 #include <wx/defs.h>
 
 #include "FileNames.h"
 #include "Languages.h"
-#include "../Theme.h"
+#include "Theme.h"
 #include "Prefs.h"
 #include "../ShuttleGui.h"
 
-#include "GUISettings.h"
+#include "Decibels.h"
 
 #include "ThemePrefs.h"
-#include "../AColor.h"
-#include "../widgets/AudacityMessageBox.h"
+#include "AColor.h"
+#include "GUISettings.h"
 
 GUIPrefs::GUIPrefs(wxWindow * parent, wxWindowID winid)
 /* i18n-hint: refers to Audacity's user interface settings */
@@ -46,12 +45,12 @@ GUIPrefs::~GUIPrefs()
 {
 }
 
-ComponentInterfaceSymbol GUIPrefs::GetSymbol()
+ComponentInterfaceSymbol GUIPrefs::GetSymbol() const
 {
    return GUI_PREFS_PLUGIN_SYMBOL;
 }
 
-TranslatableString GUIPrefs::GetDescription()
+TranslatableString GUIPrefs::GetDescription() const
 {
    return XO("Preferences for GUI");
 }
@@ -135,11 +134,19 @@ ChoiceSetting GUIManualLocation{
       { XO("Local") ,  XO("From Internet") , },
       { wxT("Local") , wxT("FromInternet") , }
    },
-   0 // "Local"
+   1 // "FromInternet"
 };
 
 void GUIPrefs::PopulateOrExchange(ShuttleGui & S)
 {
+   ChoiceSetting LanguageSetting{ wxT("/Locale/Language"),
+      { ByColumns, mLangNames, mLangCodes }
+   };
+   ChoiceSetting DBSetting{ DecibelScaleCutoff,
+      { ByColumns, mRangeChoices, mRangeCodes },
+      mDefaultRangeIndex
+   };
+
    S.SetBorder(2);
    S.StartScroller();
 
@@ -147,33 +154,12 @@ void GUIPrefs::PopulateOrExchange(ShuttleGui & S)
    {
       S.StartMultiColumn(2);
       {
-
-         S.TieChoice( XXO("&Language:"),
-            {
-               wxT("/Locale/Language"),
-               { ByColumns, mLangNames, mLangCodes }
-            }
-         );
-
-         S.TieChoice( XXO("Location of &Manual:"), GUIManualLocation);
-
-         S.TieChoice( XXO("Th&eme:"), GUITheme);
-
-         S.TieChoice( XXO("Meter dB &range:"),
-            {
-               ENV_DB_KEY,
-               { ByColumns, mRangeChoices, mRangeCodes },
-               mDefaultRangeIndex
-            }
-         );
+         S.TieChoice( XXO("&Language:"), LanguageSetting);
+         // S.TieChoice( XXO("Location of &Manual:"), GUIManualLocation);
+         S.TieChoice( XXO("Th&eme:"), GUITheme());
+         S.TieChoice( XXO("Meter dB &range:"), DBSetting);
       }
       S.EndMultiColumn();
-//      S.AddSpace(10);
-// JKC: This is a silly preference.  Kept here as a reminder that we may
-// later want to have configurable button order.
-//      S.TieCheckBox(XXO("&Ergonomic order of Transport Toolbar buttons"),
-//                    wxT("/GUI/ErgonomicTransportButtons"),
-//                    true);
 
    }
    S.EndStatic();
@@ -188,7 +174,7 @@ void GUIPrefs::PopulateOrExchange(ShuttleGui & S)
                     {wxT("/GUI/ShowExtraMenus"),
                      false});
 #ifdef EXPERIMENTAL_THEME_PREFS
-      // We do not want to make this option mainstream.  It's a 
+      // We do not want to make this option mainstream.  It's a
       // convenience for developers.
       S.TieCheckBox(XXO("Show alternative &styling (Mac vs PC)"),
                     {wxT("/GUI/ShowMac"),
@@ -201,8 +187,7 @@ void GUIPrefs::PopulateOrExchange(ShuttleGui & S)
                     {wxT("/GUI/RetainLabels"),
                      false});
       S.TieCheckBox(XXO("B&lend system and Audacity theme"),
-                    {wxT("/GUI/BlendThemes"),
-                     true});
+                     GUIBlendThemes);
 #ifndef __WXMAC__
       /* i18n-hint: RTL stands for 'Right to Left'  */
       S.TieCheckBox(XXO("Use mostly Left-to-Right layouts in RTL languages"),
@@ -238,7 +223,7 @@ bool GUIPrefs::Commit()
 
    // If language has changed, we want to change it now, not on the next reboot.
    wxString lang = gPrefs->Read(wxT("/Locale/Language"), wxT(""));
-   wxString usedLang = SetLang(lang);
+   wxString usedLang = GUISettings::SetLang(lang);
    // Bug 1523: Previously didn't check no-language (=System Language)
    if (!(lang.empty() || lang == L"System") && (lang != usedLang)) {
       // lang was not usable and is not system language.  We got overridden.
@@ -247,31 +232,16 @@ bool GUIPrefs::Commit()
    }
 
    // Reads preference GUITheme
-   theTheme.LoadPreferredTheme();
-   ThemePrefs::ApplyUpdatedImages();
+   {
+      wxBusyCursor busy;
+      theTheme.LoadPreferredTheme();
+      theTheme.DeleteUnusedThemes();
+   }
+   AColor::ApplyUpdatedImages();
 
+   GUIBlendThemes.Invalidate();
+   DecibelScaleCutoff.Invalidate();
    return true;
-}
-
-wxString GUIPrefs::SetLang( const wxString & lang )
-{
-   auto result = Languages::SetLang(FileNames::AudacityPathList(), lang);
-   if (!(lang.empty() || lang == L"System") && result != lang)
-      ::AudacityMessageBox(
-         XO("Language \"%s\" is unknown").Format( lang ) );
-
-#ifdef EXPERIMENTAL_CEE_NUMBERS_OPTION
-   bool forceCeeNumbers;
-   gPrefs->Read(wxT("/Locale/CeeNumberFormat"), &forceCeeNumbers, false);
-   if( forceCeeNumbers )
-      Internat::SetCeeNumberFormat();
-#endif
-
-#ifdef __WXMAC__
-      wxApp::s_macHelpMenuTitleName = _("&Help");
-#endif
-
-   return result;
 }
 
 int ShowClippingPrefsID()

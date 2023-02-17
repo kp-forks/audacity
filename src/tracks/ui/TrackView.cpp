@@ -9,10 +9,10 @@ Paul Licameli split from TrackPanel.cpp
 **********************************************************************/
 
 #include "TrackView.h"
-#include "../../Track.h"
+#include "Track.h"
 
 #include "ClientData.h"
-#include "../../Project.h"
+#include "Project.h"
 #include "XMLTagHandler.h"
 #include "XMLWriter.h"
 
@@ -60,18 +60,34 @@ void TrackView::CopyTo( Track &track ) const
    other.mHeight = mHeight;
 }
 
+static const AttachedTrackObjects::RegisteredFactory key{
+   []( Track &track ){
+      return DoGetView::Call( track );
+   }
+};
+
 TrackView &TrackView::Get( Track &track )
 {
-   auto pView = std::static_pointer_cast<TrackView>( track.GetTrackView() );
-   if (!pView)
-      // create on demand
-      track.SetTrackView( pView = DoGetView::Call( track ) );
-   return *pView;
+   return track.AttachedObjects::Get< TrackView >( key );
 }
 
 const TrackView &TrackView::Get( const Track &track )
 {
-   return Get( const_cast< Track& >( track ) );
+   return Get( const_cast< Track & >( track ) );
+}
+
+TrackView *TrackView::Find( Track *pTrack )
+{
+   if (!pTrack)
+      return nullptr;
+   auto &track = *pTrack;
+   // do not create on demand if it is null
+   return track.AttachedObjects::Find< TrackView >( key );
+}
+
+const TrackView *TrackView::Find( const Track *pTrack )
+{
+   return Find( const_cast< Track* >( pTrack ) );
 }
 
 void TrackView::SetMinimized(bool isMinimized)
@@ -91,12 +107,12 @@ void TrackView::WriteXMLAttributes( XMLWriter &xmlFile ) const
    xmlFile.WriteAttr(wxT("minimized"), GetMinimized());
 }
 
-bool TrackView::HandleXMLAttribute( const wxChar *attr, const wxChar *value )
+bool TrackView::HandleXMLAttribute(
+   const std::string_view& attr, const XMLAttributeValueView& valueView)
 {
-   wxString strValue( value );
    long nValue;
-   if (!wxStrcmp(attr, wxT("height")) &&
-         XMLValueChecker::IsGoodInt(strValue) && strValue.ToLong(&nValue)) {
+
+   if (attr == "height" && valueView.TryGet(nValue)) {
       // Bug 2803: Extreme values for track height (caused by integer overflow)
       // will stall Audacity as it tries to create an enormous vertical ruler.
       // So clamp to reasonable values.
@@ -104,8 +120,7 @@ bool TrackView::HandleXMLAttribute( const wxChar *attr, const wxChar *value )
       SetExpandedHeight(nValue);
       return true;
    }
-   else if (!wxStrcmp(attr, wxT("minimized")) &&
-         XMLValueChecker::IsGoodInt(strValue) && strValue.ToLong(&nValue)) {
+   else if ( attr == "minimized" && valueView.TryGet(nValue)) {
       SetMinimized(nValue != 0);
       return true;
    }
@@ -176,29 +191,30 @@ namespace {
  Attached to each project, it receives track list events and maintains the
  cache of cumulative track view heights for use by TrackPanel.
  */
-struct TrackPositioner final : ClientData::Base, wxEvtHandler
+struct TrackPositioner final : ClientData::Base
 {
    AudacityProject &mProject;
 
    explicit TrackPositioner( AudacityProject &project )
       : mProject{ project }
    {
-      TrackList::Get( project ).Bind(
-         EVT_TRACKLIST_ADDITION, &TrackPositioner::OnUpdate, this );
-      TrackList::Get( project ).Bind(
-         EVT_TRACKLIST_DELETION, &TrackPositioner::OnUpdate, this );
-      TrackList::Get( project ).Bind(
-         EVT_TRACKLIST_PERMUTED, &TrackPositioner::OnUpdate, this );
-      TrackList::Get( project ).Bind(
-         EVT_TRACKLIST_RESIZING, &TrackPositioner::OnUpdate, this );
+      mSubscription = TrackList::Get( project )
+         .Subscribe(*this, &TrackPositioner::OnUpdate);
    }
    TrackPositioner( const TrackPositioner & ) PROHIBITED;
    TrackPositioner &operator=( const TrackPositioner & ) PROHIBITED;
 
-   void OnUpdate( TrackListEvent & e )
+   void OnUpdate(const TrackListEvent & e)
    {
-      e.Skip();
-
+      switch (e.mType) {
+      case TrackListEvent::ADDITION:
+      case TrackListEvent::DELETION:
+      case TrackListEvent::PERMUTED:
+      case TrackListEvent::RESIZING:
+         break;
+      default:
+         return;
+      }
       auto iter =
          TrackList::Get( mProject ).Find( e.mpTrack.lock().get() );
       if ( !*iter )
@@ -214,6 +230,8 @@ struct TrackPositioner final : ClientData::Base, wxEvtHandler
          ++iter;
       }
    }
+
+   Observer::Subscription mSubscription;
 };
 
 static const AudacityProject::AttachedObjects::RegisteredFactory key{

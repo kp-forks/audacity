@@ -54,13 +54,13 @@
 
 #include <wx/defs.h>
 #include <wx/app.h>
-#include <wx/intl.h>
 #include <wx/filename.h>
 #include <wx/stdpaths.h>
 
 #include "Internat.h"
 #include "MemoryX.h"
 #include "BasicUI.h"
+#include "Observer.h"
 
 BoolSetting DefaultUpdatesCheckingFlag{
     L"/Update/DefaultUpdatesChecking", true };
@@ -70,45 +70,41 @@ std::unique_ptr<FileConfig> ugPrefs {};
 FileConfig *gPrefs = nullptr;
 int gMenusDirty = 0;
 
-struct MyEvent;
-wxDECLARE_EVENT(EVT_PREFS_UPDATE, MyEvent);
-
-struct MyEvent : wxEvent
-{
-public:
-   explicit MyEvent(int id) : wxEvent{ 0, EVT_PREFS_UPDATE }, mId{id} {}
-   virtual wxEvent *Clone() const override { return new MyEvent{mId}; }
-   int mId;
-};
-
-wxDEFINE_EVENT(EVT_PREFS_UPDATE, MyEvent);
-
-struct PrefsListener::Impl : wxEvtHandler
+struct PrefsListener::Impl
 {
    Impl( PrefsListener &owner );
    ~Impl();
-   void OnEvent(wxEvent&);
+   void OnEvent(int id);
    PrefsListener &mOwner;
+   Observer::Subscription mSubscription;
 };
 
-static wxEvtHandler &hub()
+namespace {
+
+struct Hub : Observer::Publisher<int>
 {
-   static wxEvtHandler theHub;
+   using Publisher::Publish;
+};
+
+static Hub &hub()
+{
+   static Hub theHub;
    return theHub;
+}
+
 }
 
 void PrefsListener::Broadcast(int id)
 {
    BasicUI::CallAfter([id]{
-      MyEvent event{ id };
-      hub().ProcessEvent(event);
+      hub().Publish(id);
    });
 }
 
 PrefsListener::Impl::Impl( PrefsListener &owner )
    : mOwner{ owner }
 {
-   hub().Bind(EVT_PREFS_UPDATE, &PrefsListener::Impl::OnEvent, this);
+   mSubscription = hub().Subscribe(*this, &Impl::OnEvent);
 }
 
 PrefsListener::Impl::~Impl()
@@ -124,14 +120,16 @@ PrefsListener::~PrefsListener()
 {
 }
 
+void PrefsListener::UpdatePrefs()
+{
+}
+
 void PrefsListener::UpdateSelectedPrefs( int )
 {
 }
 
-void PrefsListener::Impl::OnEvent( wxEvent &evt )
+void PrefsListener::Impl::OnEvent( int id )
 {
-   evt.Skip();
-   auto id = evt.GetId();
    if (id <= 0)
       mOwner.UpdatePrefs();
    else
@@ -234,6 +232,79 @@ void FinishPreferences()
    }
 }
 
+namespace
+{
+std::vector<SettingScope*> sScopes;
+}
+
+SettingScope::SettingScope()
+{
+   sScopes.push_back(this);
+}
+
+SettingScope::~SettingScope() noexcept
+{
+   // Settings can be scoped only on stack
+   // so it should be safe to assume that sScopes.top() == this;
+   assert(!sScopes.empty() && sScopes.back() == this);
+
+   if (sScopes.empty() || sScopes.back() != this)
+      return;
+
+   if (!mCommitted)
+      for (auto pSetting : mPending)
+         pSetting->Rollback();
+
+   sScopes.pop_back();
+}
+
+// static
+auto SettingScope::Add( TransactionalSettingBase &setting ) -> AddResult
+{
+   if ( sScopes.empty() || sScopes.back()->mCommitted )
+      return NotAdded;
+
+   const bool inserted = sScopes.back()->mPending.insert(&setting).second;
+
+   if (inserted)
+   {
+      setting.EnterTransaction(sScopes.size());
+
+      // We need to introduce this setting into all
+      // previous scopes that do not yet contain it.
+      for (auto it = sScopes.rbegin() + 1; it != sScopes.rend(); ++it)
+      {
+         if ((*it)->mPending.find(&setting) != (*it)->mPending.end())
+            break;
+         
+         (*it)->mPending.insert(&setting);
+      }
+   }
+   
+   return inserted ? Added : PreviouslyAdded;
+}
+
+bool SettingTransaction::Commit()
+{
+   if (sScopes.empty() || sScopes.back() != this)
+      return false;
+   
+   if ( !mCommitted ) {
+      for ( auto pSetting : mPending )
+         if ( !pSetting->Commit() )
+            return false;
+      
+      if (sScopes.size() > 1 || gPrefs->Flush())
+      {
+         mPending.clear();
+         mCommitted = true;
+         return true;
+      }
+   }
+   
+   return false;
+}
+
 //////////
 EnumValueSymbols::EnumValueSymbols(
    ByColumns_t,
@@ -323,34 +394,16 @@ bool ChoiceSetting::Write( const wxString &value )
 
    auto result = gPrefs->Write( mKey, value );
    mMigrated = true;
+
+   if (mpOtherSettings)
+      mpOtherSettings->Invalidate();
+
    return result;
-}
-
-EnumSettingBase::EnumSettingBase(
-   const SettingBase &key,
-   EnumValueSymbols symbols,
-   long defaultSymbol,
-
-   std::vector<int> intValues, // must have same size as symbols
-   const wxString &oldKey
-)
-   : ChoiceSetting{ key, std::move( symbols ), defaultSymbol }
-   , mIntValues{ std::move( intValues ) }
-   , mOldKey{ oldKey }
-{
-   auto size = mSymbols.size();
-   if( mIntValues.size() != size ) {
-      wxASSERT( false );
-      mIntValues.resize( size );
-   }
 }
 
 void ChoiceSetting::SetDefault( long value )
 {
-   if ( value < (long)mSymbols.size() )
-      mDefaultSymbol = value;
-   else
-      wxASSERT( false );
+   mDefaultSymbol = value;
 }
 
 int EnumSettingBase::ReadInt() const

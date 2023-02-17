@@ -31,7 +31,6 @@ other settings.
 #include <wx/defs.h>
 
 #include <wx/choice.h>
-#include <wx/intl.h>
 #include <wx/log.h>
 #include <wx/textctrl.h>
 
@@ -39,7 +38,7 @@ other settings.
 
 #include "Prefs.h"
 #include "../ShuttleGui.h"
-#include "../DeviceManager.h"
+#include "DeviceManager.h"
 
 enum {
    HostID = 10000,
@@ -64,12 +63,12 @@ DevicePrefs::~DevicePrefs()
 }
 
 
-ComponentInterfaceSymbol DevicePrefs::GetSymbol()
+ComponentInterfaceSymbol DevicePrefs::GetSymbol() const
 {
    return DEVICE_PREFS_PLUGIN_SYMBOL;
 }
 
-TranslatableString DevicePrefs::GetDescription()
+TranslatableString DevicePrefs::GetDescription() const
 {
    return XO("Preferences for Device");
 }
@@ -127,6 +126,10 @@ void DevicePrefs::GetNamesAndLabels()
 
 void DevicePrefs::PopulateOrExchange(ShuttleGui & S)
 {
+   ChoiceSetting HostSetting{
+      AudioIOHost,
+      { ByColumns, mHostNames, mHostLabels }
+   };
    S.SetBorder(2);
    S.StartScroller();
 
@@ -136,12 +139,7 @@ void DevicePrefs::PopulateOrExchange(ShuttleGui & S)
       S.StartMultiColumn(2);
       {
          S.Id(HostID);
-         mHost = S.TieChoice( XXO("&Host:"),
-            {
-               AudioIOHost,
-               { ByColumns, mHostNames, mHostLabels }
-            }
-         );
+         mHost = S.TieChoice( XXO("&Host:"), HostSetting);
 
          S.AddPrompt(XXO("Using:"));
          S.AddFixedText( Verbatim(wxSafeConvertMB2WX(Pa_GetVersionText() ) ) );
@@ -193,13 +191,13 @@ void DevicePrefs::PopulateOrExchange(ShuttleGui & S)
             .NameSuffix(XO("milliseconds"))
             .TieNumericTextBox(XXO("&Buffer length:"),
                                  AudioIOLatencyDuration,
-                                 9);
+                                 25);
          S.AddUnits(XO("milliseconds"));
 
          w = S
             .NameSuffix(XO("milliseconds"))
             .TieNumericTextBox(XXO("&Latency compensation:"),
-               AudioIOLatencyCorrection, 9);
+               AudioIOLatencyCorrection, 25);
          S.AddUnits(XO("milliseconds"));
       }
       S.EndThreeColumn();
@@ -412,15 +410,19 @@ bool DevicePrefs::Commit()
       AudioIORecordChannels.Write(mChannels->GetSelection() + 1);
    }
 
+   AudioIOLatencyDuration.Invalidate();
+   AudioIOLatencyCorrection.Invalidate();
    return true;
 }
 
+PrefsPanel *DevicePrefsFactory(wxWindow *parent, wxWindowID winid, AudacityProject *)
+{
+   wxASSERT(parent); // to justify safenew
+   return safenew DevicePrefs(parent, winid);
+}
+
 namespace{
-PrefsPanel::Registration sAttachment{ "Device",
-   [](wxWindow *parent, wxWindowID winid, AudacityProject *)
-   {
-      wxASSERT(parent); // to justify safenew
-      return safenew DevicePrefs(parent, winid);
-   }
-};
+   PrefsPanel::Registration sAttachment{ "Device",
+      DevicePrefsFactory
+   };
 }

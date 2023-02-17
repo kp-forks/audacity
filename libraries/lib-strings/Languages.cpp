@@ -42,6 +42,7 @@
 #include <wx/dir.h>
 #include <wx/filename.h>
 #include <wx/intl.h>
+#include <wx/stdpaths.h>
 #include <wx/textfile.h>
 #include <wx/utils.h> // for wxSetEnv
 
@@ -73,7 +74,7 @@ static bool TranslationExists(const FilePaths &pathList, wxString code)
 }
 
 #ifdef __WXMAC__
-#include <CoreFoundation/CFLocale.h>
+#include <CoreFoundation/CFPreferences.h>
 #include <wx/osx/core/cfstring.h>
 #endif
 
@@ -86,32 +87,35 @@ wxString GetSystemLanguageCode(const FilePaths &pathList)
 
    GetLanguages(pathList, langCodes, langNames);
 
-   int sysLang = wxLocale::GetSystemLanguage();
-
    const wxLanguageInfo *info;
 
 #ifdef __WXMAC__
-   // PRL: Bug 1227, system language on Mac may not be right because wxW3 is
-   // dependent on country code too in wxLocale::GetSystemLanguage().
+   // https://github.com/audacity/audacity/issues/2493
+   // It was observed, that macOS can have multiple `system default` languages,
+   // depending on the application rather than the user preferences.
+   // As a workaround, let's query the locale preferences for the application.
+   const wxCFStringRef appleLocale((CFStringRef)CFPreferencesCopyAppValue(CFSTR("AppleLocale"),
+                             kCFPreferencesCurrentApplication));
 
-   if (sysLang == wxLANGUAGE_UNKNOWN)
+   const auto localeString = appleLocale.AsString();
+   // AppleLocale has `Apple` locale format, but let us try our luck
+   // and pass it FindLanguageInfo, so we can get the best possible match.
+   info = wxLocale::FindLanguageInfo(localeString);
+
+   if (info == nullptr)
    {
-      // wxW3 did a too-specific lookup of language and country, when
-      // there is nothing for that combination; try it by language alone.
-
-      // The following lines are cribbed from that function.
-      wxCFRef<CFLocaleRef> userLocaleRef(CFLocaleCopyCurrent());
-      wxCFStringRef str(wxCFRetain((CFStringRef)CFLocaleGetValue(userLocaleRef, kCFLocaleLanguageCode)));
-      auto lang = str.AsString();
-
-      // Now avoid wxLocale::GetLanguageInfo(), instead calling:
-      info = wxLocale::FindLanguageInfo(lang);
+      // Full match has failed, lets match the language code only.
+      // wxLocale expects a two symbol code
+      wxString langCode = localeString.Left(2);
+      info = wxLocale::FindLanguageInfo(langCode);
    }
-   else
-#endif
+#else
    {
+
+      const auto sysLang = wxLocale::GetSystemLanguage();
       info = wxLocale::GetLanguageInfo(sysLang);
    }
+#endif
 
    if (info) {
       wxString fullCode = info->CanonicalName;
@@ -216,7 +220,7 @@ void GetLanguages( FilePaths pathList,
 
 #if defined(__WXGTK__)
    {
-      wxFileName pathNorm{ wxString{INSTALL_PREFIX} + L"/share/locale" };
+      wxFileName pathNorm{ wxStandardPaths::Get().GetInstallPrefix() + L"/share/locale" };
       pathNorm.Normalize();
       const wxString newPath{ pathNorm.GetFullPath() };
       if (pathList.end() ==
@@ -226,7 +230,7 @@ void GetLanguages( FilePaths pathList,
 #endif
 
    // For each language in our list we look for a corresponding entry in
-   // wxLocale.  
+   // wxLocale.
    for ( auto end = localLanguageName.end(), i = localLanguageName.begin();
       i != end; ++i )
    {
@@ -302,10 +306,7 @@ void GetLanguages( FilePaths pathList,
       reverseHash[tempNames[j]] = tempCodes[j];
    }
 
-   std::sort( tempNames.begin(), tempNames.end(),
-      []( const TranslatableString &a, const TranslatableString &b ){
-         return a.Translation() < b.Translation();
-      } );
+   std::sort(tempNames.begin(), tempNames.end(), TranslationLess);
 
    // Add system language
    langNames.push_back(XO("System"));

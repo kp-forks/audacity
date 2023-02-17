@@ -17,9 +17,11 @@ Paul Licameli split from TrackPanel.cpp
 #include "NoteTrackControls.h"
 #include "../../../../TrackPanelMouseEvent.h"
 #include "../../../../NoteTrack.h"
-#include "../../../../ProjectHistory.h"
+#include "ProjectHistory.h"
 #include "../../../../RefreshCode.h"
 #include "../../../../TrackInfo.h"
+
+#include <wx/event.h>
 
 NoteTrackButtonHandle::NoteTrackButtonHandle
 ( const std::shared_ptr<NoteTrack> &pTrack,

@@ -20,6 +20,7 @@
 class AudacityProject;
 class wxTreebook;
 class wxTreeEvent;
+class SettingTransaction;
 class ShuttleGui;
 
 #ifdef __GNUC__
@@ -72,6 +73,8 @@ private:
    PrefsPanel::Factories &mFactories;
    const TranslatableString mTitlePrefix;
 
+   std::unique_ptr< SettingTransaction > mTransaction;
+
    DECLARE_EVENT_TABLE()
 };
 
@@ -80,6 +83,9 @@ private:
 class AUDACITY_DLL_API GlobalPrefsDialog final : public PrefsDialog
 {
 public:
+   /*!
+    @param pProject may be null
+    */
    GlobalPrefsDialog(
       wxWindow * parent, AudacityProject *pProject,
       PrefsPanel::Factories &factories =

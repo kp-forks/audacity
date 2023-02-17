@@ -2,7 +2,7 @@
 
    Audacity - A Digital Audio Editor
    Copyright 1999-2018 Audacity Team
-   License: GPL v2 - see LICENSE.txt
+   License: GPL v2 or later - see LICENSE.txt
 
    Dominic Mazzoni
    Dan Horgan
@@ -49,19 +49,6 @@ public:
       keffects,
       kscriptables,
       kpreferences,
-      kselectionbar,
-      kspectralselection,
-      ktimer,
-      ktools,
-      ktransport,
-      kmixer,
-      kmeter,
-      kplaymeter,
-      krecordmeter,
-      kedit,
-      kdevice,
-      kscrub,
-      ktranscription,
       ktrackpanel,
       kruler,
       ktracks,
@@ -77,13 +64,17 @@ public:
       nCaptureWhats
    };
 
+   EnumValueSymbols kCaptureWhatStrings();
+
    static const ComponentInterfaceSymbol Symbol;
 
    ScreenshotCommand();
    // ComponentInterface overrides
-   ComponentInterfaceSymbol GetSymbol() override {return Symbol;};
-   TranslatableString GetDescription() override {return XO("Takes screenshots.");};
-   bool DefineParams( ShuttleParams & S ) override;
+   ComponentInterfaceSymbol GetSymbol() const override {return Symbol;};
+   TranslatableString GetDescription() const override {return XO("Takes screenshots.");};
+   template<bool Const> bool VisitSettings( SettingsVisitorBase<Const> &S );
+   bool VisitSettings( SettingsVisitor & S ) override;
+   bool VisitSettings( ConstSettingsVisitor & S ) override;
    void PopulateOrExchange(ShuttleGui & S) override;
 
    // AudacityCommand overrides
@@ -103,6 +94,8 @@ public:
    void GetDerivedParams();
 
 private:
+   EnumValueSymbols mSymbols;
+
    // May need to ignore the screenshot dialog
    // Appears not to be used anymore.
    wxWindow *mIgnore;
@@ -119,7 +112,7 @@ private:
 
    wxRect GetBackgroundRect();
 
-   bool CaptureToolbar(const CommandContext & Context, ToolManager *man, int type, const wxString &name);
+   bool CaptureToolbar(const CommandContext & Context, ToolManager *man, Identifier type, const wxString &name);
    bool CaptureDock(const CommandContext & Context, wxWindow *win, const wxString &fileName);
    void CaptureCommands(const CommandContext & Context, const wxArrayStringEx &Commands  );
    void CaptureEffects(const CommandContext & Context, AudacityProject * pProject, const wxString &fileName );

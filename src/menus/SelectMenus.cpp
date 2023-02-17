@@ -1,62 +1,35 @@
-
-
 #include "../AdornedRulerPanel.h"
-#include "../AudioIO.h"
+#include "AudioIO.h"
 #include "../CommonCommandFlags.h"
-#include "../SpectrumAnalyst.h"
 #include "Prefs.h"
-#include "../Project.h"
-#include "../ProjectAudioIO.h"
+#include "Project.h"
+#include "ProjectAudioIO.h"
 #include "../ProjectAudioManager.h"
-#include "../ProjectHistory.h"
+#include "ProjectHistory.h"
+#include "ProjectRate.h"
 #include "../ProjectSelectionManager.h"
 #include "../ProjectSettings.h"
 #include "../ProjectWindow.h"
+#include "../ProjectWindows.h"
 #include "../SelectUtilities.h"
-#include "../TimeDialog.h"
+#include "../SyncLock.h"
 #include "../TrackPanel.h"
-#include "../WaveTrack.h"
+#include "WaveTrack.h"
+#include "../LabelTrack.h"
 #include "../commands/CommandContext.h"
 #include "../commands/CommandManager.h"
 #include "../toolbars/ControlToolBar.h"
 #include "../tracks/ui/SelectHandle.h"
+#include "../tracks/labeltrack/ui/LabelTrackView.h"
 #include "../tracks/playabletrack/wavetrack/ui/WaveTrackView.h"
-#include "../tracks/playabletrack/wavetrack/ui/WaveTrackViewConstants.h"
 
 // private helper classes and functions
 namespace {
 
-void DoNextPeakFrequency(AudacityProject &project, bool up)
-{
-   auto &tracks = TrackList::Get( project );
-   auto &viewInfo = ViewInfo::Get( project );
-
-   // Find the first selected wave track that is in a spectrogram view.
-   const WaveTrack *pTrack {};
-   for ( auto wt : tracks.Selected< const WaveTrack >() ) {
-      const auto displays = WaveTrackView::Get( *wt ).GetDisplays();
-      bool hasSpectrum = (displays.end() != std::find(
-         displays.begin(), displays.end(),
-         WaveTrackSubView::Type{ WaveTrackViewConstants::Spectrum, {} }
-      ) );
-      if ( hasSpectrum ) {
-         pTrack = wt;
-         break;
-      }
-   }
-
-   if (pTrack) {
-      SpectrumAnalyst analyst;
-      SelectHandle::SnapCenterOnce(analyst, viewInfo, pTrack, up);
-      ProjectHistory::Get( project ).ModifyState(false);
-   }
-}
-
 double NearestZeroCrossing
 (AudacityProject &project, double t0)
 {
-   const auto &settings = ProjectSettings::Get( project );
-   auto rate = settings.GetRate();
+   auto rate = ProjectRate::Get(project).GetRate();
    auto &tracks = TrackList::Get( project );
 
    // Window is 1/100th of a second.
@@ -190,8 +163,8 @@ void SeekWhenAudioActive(double seekStep, wxLongLong &lastSelectionAdjustment)
 double GridMove
 (AudacityProject &project, double t, int minPix)
 {
-   const auto &settings = ProjectSettings::Get( project );
-   auto rate = settings.GetRate();
+   auto &settings = ProjectSettings::Get(project);
+   auto rate = ProjectRate::Get(project).GetRate();
    auto &viewInfo = ViewInfo::Get( project );
    auto format = settings.GetSelectionFormat();
 
@@ -457,6 +430,27 @@ struct Handler
 
 void OnSelectAll(const CommandContext &context)
 {
+   auto& trackPanel = TrackPanel::Get(context.project);
+   auto& tracks = TrackList::Get(context.project);
+   
+   for (auto lt : tracks.Selected< LabelTrack >()) {
+      auto& view = LabelTrackView::Get(*lt);
+      if (view.SelectAllText(context.project)) {
+         trackPanel.Refresh(false);
+         return;
+      }
+   }
+
+   //Presumably, there might be not more than one track
+   //that expects text input
+   for (auto wt : tracks.Any<WaveTrack>()) {
+      auto& view = WaveTrackView::Get(*wt);
+      if (view.SelectAllText(context.project)) {
+         trackPanel.Refresh(false);
+         return;
+      }
+   }
+
    SelectUtilities::DoSelectAll( context.project );
 }
 
@@ -483,7 +477,7 @@ void OnSelectSyncLockSel(const CommandContext &context)
 
    bool selected = false;
    for (auto t : tracks.Any() + &Track::SupportsBasicEditing
-         + &Track::IsSyncLockSelected - &Track::IsSelected) {
+         + &SyncLock::IsSyncLockSelected - &Track::IsSelected) {
       t->SetSelected(true);
       selected = true;
    }
@@ -492,85 +486,16 @@ void OnSelectSyncLockSel(const CommandContext &context)
       ProjectHistory::Get( project ).ModifyState(false);
 }
 
-//this pops up a dialog which allows the left selection to be set.
-//If playing/recording is happening, it sets the left selection at
-//the current play position.
 void OnSetLeftSelection(const CommandContext &context)
 {
-   auto &project = context.project;
-   auto token = ProjectAudioIO::Get( project ).GetAudioIOToken();
-   auto &selectedRegion = ViewInfo::Get( project ).selectedRegion;
-   const auto &settings = ProjectSettings::Get( project );
-   auto &window = GetProjectFrame( project );
-
-   bool bSelChanged = false;
-   auto gAudioIO = AudioIO::Get();
-   if ((token > 0) && gAudioIO->IsStreamActive(token))
-   {
-      double indicator = gAudioIO->GetStreamTime();
-      selectedRegion.setT0(indicator, false);
-      bSelChanged = true;
-   }
-   else
-   {
-      auto fmt = settings.GetSelectionFormat();
-      auto rate = settings.GetRate();
-
-      TimeDialog dlg(&window, XO("Set Left Selection Boundary"),
-         fmt, rate, selectedRegion.t0(), XO("Position"));
-
-      if (wxID_OK == dlg.ShowModal())
-      {
-         //Get the value from the dialog
-         selectedRegion.setT0(
-            std::max(0.0, dlg.GetTimeValue()), false);
-         bSelChanged = true;
-      }
-   }
-
-   if (bSelChanged)
-   {
-      ProjectHistory::Get( project ).ModifyState(false);
-   }
+   SelectUtilities::OnSetRegion(context.project,
+      true, true, XO("Set Left Selection Boundary"));
 }
 
 void OnSetRightSelection(const CommandContext &context)
 {
-   auto &project = context.project;
-   auto token = ProjectAudioIO::Get( project ).GetAudioIOToken();
-   auto &selectedRegion = ViewInfo::Get( project ).selectedRegion;
-   const auto &settings = ProjectSettings::Get( project );
-   auto &window = GetProjectFrame( project );
-
-   bool bSelChanged = false;
-   auto gAudioIO = AudioIO::Get();
-   if ((token > 0) && gAudioIO->IsStreamActive(token))
-   {
-      double indicator = gAudioIO->GetStreamTime();
-      selectedRegion.setT1(indicator, false);
-      bSelChanged = true;
-   }
-   else
-   {
-      auto fmt = settings.GetSelectionFormat();
-      auto rate = settings.GetRate();
-
-      TimeDialog dlg(&window, XO("Set Right Selection Boundary"),
-         fmt, rate, selectedRegion.t1(), XO("Position"));
-
-      if (wxID_OK == dlg.ShowModal())
-      {
-         //Get the value from the dialog
-         selectedRegion.setT1(
-            std::max(0.0, dlg.GetTimeValue()), false);
-         bSelChanged = true;
-      }
-   }
-
-   if (bSelChanged)
-   {
-      ProjectHistory::Get( project ).ModifyState(false);
-   }
+   SelectUtilities::OnSetRegion(context.project,
+      false, true, XO("Set Right Selection Boundary"));
 }
 
 void OnSelectStartCursor(const CommandContext &context)
@@ -663,48 +588,6 @@ void OnSelectionRestore(const CommandContext &context)
    ProjectHistory::Get( project ).ModifyState(false);
 }
 
-#ifdef EXPERIMENTAL_SPECTRAL_EDITING
-
-// Handler state:
-double mLastF0{ SelectedRegion::UndefinedFrequency };
-double mLastF1{ SelectedRegion::UndefinedFrequency };
-
-void OnToggleSpectralSelection(const CommandContext &context)
-{
-   auto &project = context.project;
-   auto &selectedRegion = ViewInfo::Get( project ).selectedRegion;
-
-   const double f0 = selectedRegion.f0();
-   const double f1 = selectedRegion.f1();
-   const bool haveSpectralSelection =
-   !(f0 == SelectedRegion::UndefinedFrequency &&
-     f1 == SelectedRegion::UndefinedFrequency);
-   if (haveSpectralSelection)
-   {
-      mLastF0 = f0;
-      mLastF1 = f1;
-      selectedRegion.setFrequencies
-      (SelectedRegion::UndefinedFrequency, SelectedRegion::UndefinedFrequency);
-   }
-   else
-      selectedRegion.setFrequencies(mLastF0, mLastF1);
-
-   ProjectHistory::Get( project ).ModifyState(false);
-}
-
-void OnNextHigherPeakFrequency(const CommandContext &context)
-{
-   auto &project = context.project;
-   DoNextPeakFrequency(project, true);
-}
-
-void OnNextLowerPeakFrequency(const CommandContext &context)
-{
-   auto &project = context.project;
-   DoNextPeakFrequency(project, false);
-}
-#endif
-
 // Handler state:
 bool mCursorPositionHasBeenStored{ false };
 double mCursorPositionStored{ 0.0 };
@@ -744,7 +627,6 @@ void OnZeroCrossing(const CommandContext &context)
 {
    auto &project = context.project;
    auto &selectedRegion = ViewInfo::Get( project ).selectedRegion;
-   const auto &settings = ProjectSettings::Get( project );
 
    const double t0 = NearestZeroCrossing(project, selectedRegion.t0());
    if (selectedRegion.isPoint())
@@ -752,7 +634,7 @@ void OnZeroCrossing(const CommandContext &context)
    else {
       const double t1 = NearestZeroCrossing(project, selectedRegion.t1());
       // Empty selection is generally not much use, so do not make it if empty.
-      if( fabs( t1 - t0 ) * settings.GetRate() > 1.5 )
+      if( fabs( t1 - t0 ) * ProjectRate::Get(project).GetRate() > 1.5 )
          selectedRegion.setTimes(t0, t1);
    }
 
@@ -1096,23 +978,10 @@ BaseItemSharedPtr SelectMenu()
                Command( wxT("SelRestore"), XXO("Retrieve Selectio&n"),
                   FN(OnSelectionRestore), TracksExistFlag() )
             )
-         ),
+         )
 
          //////////////////////////////////////////////////////////////////////////
 
-   #ifdef EXPERIMENTAL_SPECTRAL_EDITING
-         Menu( wxT("Spectral"), XXO("S&pectral"),
-            Command( wxT("ToggleSpectralSelection"),
-               XXO("To&ggle Spectral Selection"), FN(OnToggleSpectralSelection),
-               TracksExistFlag(), wxT("Q") ),
-            Command( wxT("NextHigherPeakFrequency"),
-               XXO("Next &Higher Peak Frequency"), FN(OnNextHigherPeakFrequency),
-               TracksExistFlag() ),
-            Command( wxT("NextLowerPeakFrequency"),
-               XXO("Next &Lower Peak Frequency"), FN(OnNextLowerPeakFrequency),
-               TracksExistFlag() )
-         )
-   #endif
       ),
 
       Section( "",

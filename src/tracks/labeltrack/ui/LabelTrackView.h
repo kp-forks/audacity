@@ -12,6 +12,7 @@ Paul Licameli split from class LabelTrack
 #define __AUDACITY_LABEL_TRACK_VIEW__
 
 #include "../../ui/CommonTrackView.h"
+#include "Observer.h"
 
 class LabelGlyphHandle;
 class LabelTextHandle;
@@ -69,7 +70,6 @@ public:
 
 private:
    void BindTo( LabelTrack *pParent );
-   void UnbindFrom( LabelTrack *pParent );
 
    std::vector<UIHandlePtr> DetailedHitTest
       (const TrackPanelMouseState &state,
@@ -114,6 +114,8 @@ public:
 
    bool CutSelectedText( AudacityProject &project );
    bool CopySelectedText( AudacityProject &project );
+   bool SelectAllText(AudacityProject& project);
+   
    bool PasteSelectedText(
       AudacityProject &project, double sel0, double sel1 );
 
@@ -184,7 +186,7 @@ private:
    /// Keeps track of the currently selected label (not same as selection region)
    /// used for navigation between labels
    mutable Index mNavigationIndex{ -1 };
-   /// Index of the current label text beeing edited
+   /// Index of the current label text being edited
    mutable Index mTextEditIndex{ -1 };
 
    mutable wxString mUndoLabel;
@@ -224,7 +226,7 @@ public:
    int GetInitialCursorPosition() const { return mInitialCursorPos; }
 
    /// Sets the label with specified index for editing,
-   /// optionaly selection may be specified with [start, end]
+   /// optionally selection may be specified with [start, end]
    void SetTextSelection(int labelIndex, int start = 1, int end = 1);
    int GetTextEditIndex(AudacityProject& project) const;
    void ResetTextSelection();
@@ -246,10 +248,12 @@ private:
 private:
    void RemoveSelectedText();
 
-   void OnLabelAdded( LabelTrackEvent& );
-   void OnLabelDeleted( LabelTrackEvent& );
-   void OnLabelPermuted( LabelTrackEvent& );
-   void OnSelectionChange( LabelTrackEvent& );
+   void OnLabelAdded( const LabelTrackEvent& );
+   void OnLabelDeleted( const LabelTrackEvent& );
+   void OnLabelPermuted( const LabelTrackEvent& );
+   void OnSelectionChange( const LabelTrackEvent& );
+
+   Observer::Subscription mSubscription;
 
    std::shared_ptr<LabelTrack> FindLabelTrack();
    std::shared_ptr<const LabelTrack> FindLabelTrack() const;

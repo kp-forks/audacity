@@ -19,8 +19,9 @@ effect that uses SBSMS to do its processing (TimeScale)
 #include <math.h>
 
 #include "../LabelTrack.h"
-#include "../WaveClip.h"
-#include "../WaveTrack.h"
+#include "../SyncLock.h"
+#include "WaveClip.h"
+#include "WaveTrack.h"
 #include "TimeWarper.h"
 
 enum {
@@ -209,7 +210,7 @@ double EffectSBSMS::getRate(double rateStart, double rateEnd, SlideType slideTyp
    return slide.getRate(t);
 }
 
-bool EffectSBSMS::Process()
+bool EffectSBSMS::Process(EffectInstance &, EffectSettings &)
 {
    bool bGoodResult = true;
 
@@ -228,7 +229,8 @@ bool EffectSBSMS::Process()
 
    mOutputTracks->Leaders().VisitWhile( bGoodResult,
       [&](LabelTrack *lt, const Track::Fallthrough &fallthrough) {
-         if (!(lt->GetSelected() || (mustSync && lt->IsSyncLockSelected())))
+         if (!(lt->GetSelected() ||
+               (mustSync && SyncLock::IsSyncLockSelected(lt))))
             return fallthrough();
          if (!ProcessLabelTrack(lt))
             bGoodResult = false;
@@ -413,7 +415,7 @@ bool EffectSBSMS::Process()
          mCurTrackNum++;
       },
       [&](Track *t) {
-         if (mustSync && t->IsSyncLockSelected())
+         if (mustSync && SyncLock::IsSyncLockSelected(t))
          {
             t->SyncLockAdjust(mCurT1, mCurT0 + (mCurT1 - mCurT0) * mTotalStretch);
          }
@@ -437,8 +439,8 @@ void EffectSBSMS::Finalize(WaveTrack* orig, WaveTrack* out, const TimeWarper *wa
    auto front = clips.front();
    auto back = clips.back();
    for (auto &clip : clips) {
-      auto st = clip->GetStartTime();
-      auto et = clip->GetEndTime();
+      auto st = clip->GetPlayStartTime();
+      auto et = clip->GetPlayEndTime();
 
       if (st >= mCurT0 || et < mCurT1) {
          if (mCurT0 < st && clip == front) {

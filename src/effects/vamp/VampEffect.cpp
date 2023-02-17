@@ -15,23 +15,20 @@
 
 #if defined(USE_VAMP)
 #include "VampEffect.h"
+#include "../AnalysisTracks.h"
 
 #include <vamp-hostsdk/Plugin.h>
 #include <vamp-hostsdk/PluginChannelAdapter.h>
 #include <vamp-hostsdk/PluginInputDomainAdapter.h>
 
 #include <wx/wxprec.h>
-#include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
 #include <wx/combobox.h>
-#include <wx/sizer.h>
 #include <wx/slider.h>
 #include <wx/statbox.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
-#include <wx/tokenzr.h>
-#include <wx/intl.h>
 #include <wx/scrolwin.h>
 #include <wx/version.h>
 
@@ -41,7 +38,7 @@
 #include "../../widgets/AudacityMessageBox.h"
 
 #include "../../LabelTrack.h"
-#include "../../WaveTrack.h"
+#include "WaveTrack.h"
 
 enum
 {
@@ -75,8 +72,8 @@ VampEffect::VampEffect(std::unique_ptr<Vamp::Plugin> &&plugin,
    mHasParameters(hasParameters),
    mRate(0)
 {
-   mKey = mPath.BeforeLast(wxT('/')).ToUTF8();
-   mName = mPath.AfterLast(wxT('/'));
+   mKey = mPath.BeforeFirst(wxT('/')).ToUTF8();
+   mName = mPath.AfterFirst(wxT('/'));
 }
 
 VampEffect::~VampEffect()
@@ -87,27 +84,27 @@ VampEffect::~VampEffect()
 // ComponentInterface implementation
 // ============================================================================
 
-PluginPath VampEffect::GetPath()
+PluginPath VampEffect::GetPath() const
 {
    return mPath;
 }
 
-ComponentInterfaceSymbol VampEffect::GetSymbol()
+ComponentInterfaceSymbol VampEffect::GetSymbol() const
 {
    return mName;
 }
 
-VendorSymbol VampEffect::GetVendor()
+VendorSymbol VampEffect::GetVendor() const
 {
    return { wxString::FromUTF8(mPlugin->getMaker().c_str()) };
 }
 
-wxString VampEffect::GetVersion()
+wxString VampEffect::GetVersion() const
 {
    return wxString::Format(wxT("%d"), mPlugin->getPluginVersion());
 }
 
-TranslatableString VampEffect::GetDescription()
+TranslatableString VampEffect::GetDescription() const
 {
    return Verbatim(
       wxString::FromUTF8(mPlugin->getCopyright().c_str()) );
@@ -117,35 +114,33 @@ TranslatableString VampEffect::GetDescription()
 // EffectDefinitionInterface implementation
 // ============================================================================
 
-EffectType VampEffect::GetType()
+EffectType VampEffect::GetType() const
 {
    return EffectTypeAnalyze;
 }
 
-EffectFamilySymbol VampEffect::GetFamily()
+EffectFamilySymbol VampEffect::GetFamily() const
 {
    return VAMPEFFECTS_FAMILY;
 }
 
-bool VampEffect::IsInteractive()
+bool VampEffect::IsInteractive() const
 {
    return mHasParameters;
 }
 
-bool VampEffect::IsDefault()
+bool VampEffect::IsDefault() const
 {
    return false;
 }
 
-
-// EffectClientInterface implementation
-
-unsigned VampEffect::GetAudioInCount()
+unsigned VampEffect::GetAudioInCount() const
 {
    return mPlugin->getMaxChannelCount();
 }
 
-bool VampEffect::GetAutomationParameters(CommandParameters & parms)
+bool VampEffect::SaveSettings(
+   const EffectSettings &, CommandParameters & parms) const
 {
    for (size_t p = 0, paramCount = mParameters.size(); p < paramCount; p++)
    {
@@ -191,7 +186,8 @@ bool VampEffect::GetAutomationParameters(CommandParameters & parms)
    return true;
 }
 
-bool VampEffect::SetAutomationParameters(CommandParameters & parms)
+bool VampEffect::LoadSettings(
+   const CommandParameters & parms, EffectSettings &settings) const
 {
    // First pass verifies values
    for (size_t p = 0, paramCount = mParameters.size(); p < paramCount; p++)
@@ -341,7 +337,7 @@ bool VampEffect::Init()
    return true;
 }
 
-bool VampEffect::Process()
+bool VampEffect::Process(EffectInstance &, EffectSettings &)
 {
    if (!mPlugin)
    {
@@ -362,7 +358,7 @@ bool VampEffect::Process()
       multiple = true;
    }
 
-   std::vector<std::shared_ptr<Effect::AddedAnalysisTrack>> addedTracks;
+   std::vector<std::shared_ptr<AddedAnalysisTrack>> addedTracks;
 
    for (auto leader : inputTracks()->Leaders<const WaveTrack>())
    {
@@ -434,7 +430,7 @@ bool VampEffect::Process()
       }
 
       const auto effectName = GetSymbol().Translation();
-      addedTracks.push_back(AddAnalysisTrack(
+      addedTracks.push_back(AddAnalysisTrack(*this,
          multiple
          ? wxString::Format( _("%s: %s"), left->GetName(), effectName )
          : effectName
@@ -527,13 +523,11 @@ bool VampEffect::Process()
    return true;
 }
 
-void VampEffect::End()
+std::unique_ptr<EffectUIValidator> VampEffect::PopulateOrExchange(
+   ShuttleGui & S, EffectInstance &, EffectSettingsAccess &,
+   const EffectOutputs *)
 {
-   mPlugin.reset();
-}
-
-void VampEffect::PopulateOrExchange(ShuttleGui & S)
-{
+   mUIParent = S.GetParent();
    Vamp::Plugin::ProgramList programs = mPlugin->getPrograms();
 
    mParameters = mPlugin->getParameterDescriptors();
@@ -690,10 +684,10 @@ void VampEffect::PopulateOrExchange(ShuttleGui & S)
 
    scroller->SetScrollRate(0, 20);
 
-   return;
+   return nullptr;
 }
 
-bool VampEffect::TransferDataToWindow()
+bool VampEffect::TransferDataToWindow(const EffectSettings &)
 {
    if (!mUIParent->TransferDataToWindow())
    {
@@ -705,7 +699,7 @@ bool VampEffect::TransferDataToWindow()
    return true;
 }
 
-bool VampEffect::TransferDataFromWindow()
+bool VampEffect::TransferDataFromWindow(EffectSettings &)
 {
    if (!mUIParent->Validate() || !mUIParent->TransferDataFromWindow())
    {

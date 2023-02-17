@@ -17,7 +17,6 @@
 
 #include <wx/defs.h>
 #include <wx/ffile.h>
-#include <wx/intl.h>
 #include <wx/log.h>
 
 #include <string.h>
@@ -142,30 +141,35 @@ bool XMLFileReader::ParseString(XMLTagHandler *baseHandler,
 
    mBaseHandler = baseHandler;
 
-   if (!XML_Parse(mParser, buffer, len, true))
-   {
-
-      // Embedded error string from expat doesn't translate (yet)
-      // We could make a table of XOs if we wanted so that it could
-      // If we do, uncomment the second constructor argument so it's not
-      // a verbatim string
-      mLibraryErrorStr = Verbatim(
-         XML_ErrorString(XML_GetErrorCode(mParser)) // , {}
-      );
-
-      mErrorStr = XO("Error: %s at line %lu").Format(
-         mLibraryErrorStr,
-         (long unsigned int)XML_GetCurrentLineNumber(mParser)
-      );
-
-      wxLogMessage(wxT("ParseString error: %s\n===begin===%s\n===end==="), mErrorStr.Debug(), buffer);
-
+   if (!ParseBuffer(baseHandler, utf8.data(), utf8.length(), true))
       return false;
-   }
 
    // Even though there were no parse errors, we only succeed if
    // the first-level handler actually got called, and didn't
    // return false.
+   if (!mBaseHandler)
+   {
+      mErrorStr = XO("Could not parse XML");
+      return false;
+   }
+
+   return true;
+}
+
+bool XMLFileReader::ParseMemoryStream(
+   XMLTagHandler* baseHandler, const MemoryStream& xmldata)
+{
+   mBaseHandler = baseHandler;
+
+   for (auto chunk : xmldata)
+   {
+      if (!ParseBuffer(baseHandler, static_cast<const char*>(chunk.first), chunk.second, false))
+         return false;
+   }
+
+   if (!ParseBuffer(baseHandler, nullptr, 0, true))
+      return false;
+
    if (!mBaseHandler)
    {
       mErrorStr = XO("Could not parse XML");
@@ -203,7 +207,18 @@ void XMLFileReader::startElement(void *userData, const char *name,
    }
 
    if (XMLTagHandler *& handler = handlers.back()) {
-      if (!handler->ReadXMLTag(name, atts)) {
+      This->mCurrentTagAttributes.clear();
+
+      while(*atts)
+      {
+         const char* name = *atts++;
+         const char* value = *atts++;
+
+         This->mCurrentTagAttributes.emplace_back(
+            std::string_view(name), XMLAttributeValueView(std::string_view(value)));
+      }
+
+      if (!handler->HandleXMLTag(name, This->mCurrentTagAttributes)) {
          handler = nullptr;
          if (handlers.size() == 1)
             This->mBaseHandler = nullptr;
@@ -231,4 +246,33 @@ void XMLFileReader::charHandler(void *userData, const char *s, int len)
 
    if (XMLTagHandler *const handler = handlers.back())
       handler->ReadXMLContent(s, len);
+}
+
+bool XMLFileReader::ParseBuffer(
+   XMLTagHandler* baseHandler, const char* buffer, size_t len, bool isFinal)
+{
+   if (!XML_Parse(mParser, buffer, len, isFinal))
+   {
+
+      // Embedded error string from expat doesn't translate (yet)
+      // We could make a table of XOs if we wanted so that it could
+      // If we do, uncomment the second constructor argument so it's not
+      // a verbatim string
+      mLibraryErrorStr =
+         Verbatim(XML_ErrorString(XML_GetErrorCode(mParser)) // , {}
+         );
+
+      mErrorStr = XO("Error: %s at line %lu")
+                     .Format(
+                        mLibraryErrorStr,
+                        (long unsigned int)XML_GetCurrentLineNumber(mParser));
+
+      wxLogMessage(
+         wxT("ParseString error: %s\n===begin===%s\n===end==="),
+         mErrorStr.Debug(), buffer);
+
+      return false;
+   }
+
+   return true;
 }

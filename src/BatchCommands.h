@@ -15,8 +15,8 @@
 #include <wx/defs.h>
 
 #include "export/Export.h"
-#include "commands/CommandFlag.h"
 #include "ComponentInterface.h" // for ComponentInterfaceSymbol
+#include "PluginProvider.h" // for PluginID
 
 class wxArrayString;
 class Effect;
@@ -55,17 +55,11 @@ private:
 // Stores information for one macro
 class MacroCommands final {
  public:
-   static bool DoAudacityCommand(
-      const PluginID & ID, const CommandContext & context, unsigned flags );
-
    // constructors and destructors
    MacroCommands( AudacityProject &project );
  public:
    bool ApplyMacro( const MacroCommandsCatalog &catalog,
       const wxString & filename = {});
-   static bool HandleTextualCommand( CommandManager &commandManager,
-      const CommandID & Str,
-      const CommandContext & context, CommandFlag flags, bool alwaysEnabled);
    bool ApplyCommand( const TranslatableString &friendlyCommand,
       const CommandID & command, const wxString & params,
       CommandContext const * pContext=NULL );

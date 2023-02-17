@@ -14,6 +14,7 @@
 #include <wx/defs.h>
 
 #include "ToolBar.h"
+#include "widgets/auStaticText.h"
 
 // Column for 
 //   Project rate
@@ -45,8 +46,13 @@ class NumericTextCtrl;
 class AUDACITY_DLL_API SelectionBar final : public ToolBar {
 
  public:
+   static Identifier ID();
+
    SelectionBar( AudacityProject &project );
    virtual ~SelectionBar();
+
+   bool ShownByDefault() const override;
+   DockID DefaultDockID() const override;
 
    static SelectionBar &Get( AudacityProject &project );
    static const SelectionBar &Get( const AudacityProject &project );

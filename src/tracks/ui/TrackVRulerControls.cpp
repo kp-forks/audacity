@@ -13,11 +13,11 @@ Paul Licameli split from TrackPanel.cpp
 
 #include "TrackView.h"
 
-#include "../../AColor.h"
-#include "../../Track.h"
+#include "AColor.h"
+#include "Track.h"
 #include "../../TrackArtist.h"
 #include "../../TrackPanelDrawingContext.h"
-#include "../../ViewInfo.h"
+#include "ViewInfo.h"
 
 #include <wx/cursor.h>
 #include <wx/dc.h>

@@ -28,7 +28,7 @@ It's defined in Import.h
 
 \class Importer
 \brief Class which actually imports the auido, using functions defined
-in ImportPCM.cpp, ImportMP3.cpp, ImportOGG.cpp, ImportRawData.cpp,
+in ImportPCM.cpp, ImportMP3_*.cpp, ImportOGG.cpp, ImportRawData.cpp,
 ImportLOF.cpp, and ImportAUP.cpp.
 
 *//******************************************************************/
@@ -44,16 +44,14 @@ ImportLOF.cpp, and ImportAUP.cpp.
 #include <unordered_set>
 
 #include <wx/textctrl.h>
-#include <wx/string.h>
-#include <wx/intl.h>
 #include <wx/listbox.h>
 #include <wx/log.h>
 #include <wx/sizer.h>         //for wxBoxSizer
 #include "../FFmpeg.h"
 #include "FileNames.h"
 #include "../ShuttleGui.h"
-#include "../Project.h"
-#include "../WaveTrack.h"
+#include "Project.h"
+#include "WaveTrack.h"
 
 #include "Prefs.h"
 
@@ -138,11 +136,11 @@ bool Importer::Initialize()
    using namespace Registry;
    static OrderingPreferenceInitializer init{
       PathStart,
-      { {wxT(""), wxT("AUP,PCM,OGG,FLAC,MP3,LOF,FFmpeg") } }
+      { {wxT(""), wxT("AUP,PCM,OGG,FLAC,MP3,LOF,WavPack,FFmpeg") } }
       // QT and GStreamer are only conditionally compiled and would get
       // placed at the end if present
    };
-   
+
    static struct MyVisitor final : Visitor {
       MyVisitor()
       {
@@ -188,7 +186,7 @@ Importer::GetFileTypes( const FileNames::FileType &extraType )
 
    if ( !extraType.extensions.empty() )
       fileTypes.push_back( extraType );
- 
+
    FileNames::FileTypes l;
    for(const auto &importPlugin : sImportPluginList())
    {
@@ -659,10 +657,8 @@ bool Importer::Import( AudacityProject &project,
             }
          }
 
-         if (res == ProgressResult::Cancelled || res == ProgressResult::Failed)
-         {
+         if (res == ProgressResult::Cancelled)
             return false;
-         }
 
          // We could exit here since we had a match on the file extension,
          // but there may be another plug-in that can import the file and
@@ -804,7 +800,7 @@ bool Importer::Import( AudacityProject &project,
 "Audacity did not recognize the type of the file '%s'.\n\n%sFor uncompressed files, also try File > Import > Raw Data.")
          .Format( fName,
 #if defined(USE_FFMPEG)
-                  !FFmpegLibsInst()
+               !FFmpegFunctions::Load()
                   ? XO("Try installing FFmpeg.\n\n") :
 #endif
                   Verbatim("") );
@@ -893,3 +889,5 @@ void ImportStreamDialog::OnCancel(wxCommandEvent & WXUNUSED(event))
 {
    EndModal( wxID_CANCEL );
 }
+
+BoolSetting NewImportingSession{ L"/NewImportingSession", false };

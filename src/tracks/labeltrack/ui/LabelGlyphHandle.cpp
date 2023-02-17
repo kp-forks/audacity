@@ -14,36 +14,35 @@ Paul Licameli split from TrackPanel.cpp
 #include "LabelTrackView.h"
 #include "../../../HitTestResult.h"
 #include "../../../LabelTrack.h"
-#include "../../../ProjectHistory.h"
+#include "ProjectHistory.h"
 #include "../../../RefreshCode.h"
 #include "../../../TrackPanelMouseEvent.h"
-#include "../../../UndoManager.h"
-#include "../../../ViewInfo.h"
+#include "UndoManager.h"
+#include "ViewInfo.h"
 #include "../../../SelectionState.h"
-#include "../../../ProjectAudioIO.h"
+#include "ProjectAudioIO.h"
+#include "../../../../images/Cursors.h"
 #include "../../../tracks/ui/TimeShiftHandle.h"
 
 #include <wx/cursor.h>
+#include <wx/event.h>
 #include <wx/translation.h>
 
 LabelTrackHit::LabelTrackHit( const std::shared_ptr<LabelTrack> &pLT )
    : mpLT{ pLT }
 {
-   pLT->Bind(
-      EVT_LABELTRACK_PERMUTED, &LabelTrackHit::OnLabelPermuted, this );
+   mSubscription = pLT->Subscribe( *this, &LabelTrackHit::OnLabelPermuted );
 }
 
 LabelTrackHit::~LabelTrackHit()
 {
-   // Must do this because this sink isn't wxEvtHandler
-   mpLT->Unbind(
-      EVT_LABELTRACK_PERMUTED, &LabelTrackHit::OnLabelPermuted, this );
 }
 
-void LabelTrackHit::OnLabelPermuted( LabelTrackEvent &e )
+void LabelTrackHit::OnLabelPermuted( const LabelTrackEvent &e )
 {
-   e.Skip();
    if ( e.mpTrack.lock() != mpLT )
+      return;
+   if ( e.type != LabelTrackEvent::Permutation )
       return;
 
    auto former = e.mFormerPosition;
@@ -84,17 +83,6 @@ UIHandle::Result LabelGlyphHandle::NeedChangeHighlight
       // pointer moves between the circle and the chevron
       return RefreshCode::RefreshCell;
    return 0;
-}
-
-HitTestPreview LabelGlyphHandle::HitPreview(bool hitCenter)
-{
-   static wxCursor arrowCursor{ wxCURSOR_ARROW };
-   return {
-      (hitCenter
-         ? XO("Drag one or more label boundaries.")
-         : XO("Drag label boundary.")),
-      &arrowCursor
-   };
 }
 
 UIHandlePtr LabelGlyphHandle::HitTest
@@ -173,7 +161,7 @@ void LabelGlyphHandle::HandleGlyphClick
             // then it's an adjust.
             // In both cases the two points coalesce.
             // 
-            // NOTE: seems that it's not neccessary that hitting the both
+            // NOTE: seems that it's not necessary that hitting the both
             // left and right handles mean that we're dealing with a point, 
             // but the range will be turned into a point on click
             bool isPointLabel = hit.mMouseOverLabelLeft == hit.mMouseOverLabelRight;
@@ -375,10 +363,17 @@ bool LabelGlyphHandle::HandleGlyphDragRelease
       int x = Constrain( evt.m_x + mxMouseDisplacement - r.x, 0, r.width);
 
       double fNewX = zoomInfo.PositionToTime(x, 0);
-      // Moving the whole ranged label
+      // Moving the whole ranged label(s)
       if (hit.mMouseOverLabel != -1)
       {
-         MayMoveLabel(hit.mMouseOverLabel, -1, fNewX);
+         if (evt.ShiftDown())
+         {
+            auto dt = fNewX - mLabels[hit.mMouseOverLabel].getT0();
+            for (auto i = 0, count = static_cast<int>(mLabels.size()); i < count; ++i)
+               MayMoveLabel(i, -1, mLabels[i].getT0() + dt);
+         }
+         else
+            MayMoveLabel(hit.mMouseOverLabel, -1, fNewX);
       }
       // If we're on the 'dot' and nowe're moving,
       // Though shift-down inverts that.
@@ -432,7 +427,23 @@ UIHandle::Result LabelGlyphHandle::Drag
 HitTestPreview LabelGlyphHandle::Preview
 (const TrackPanelMouseState &, AudacityProject *)
 {
-   return HitPreview( (mpHit->mEdge & 4 )!=0);
+   static wxCursor arrowCursor{ wxCURSOR_ARROW };
+   static auto handOpenCursor =
+      MakeCursor(wxCURSOR_HAND, RearrangeCursorXpm, 16, 16);
+   static auto handClosedCursor =
+      MakeCursor(wxCURSOR_HAND, RearrangingCursorXpm, 16, 16);
+
+   if (mpHit->mMouseOverLabel != -1)
+   {
+      return {
+         XO("Drag label. Hold shift and drag to move all labels on the same track."),
+         mpHit->mIsAdjustingLabel ? &*handClosedCursor : &*handOpenCursor
+      };
+   }
+   else if ((mpHit->mEdge & 4) != 0)
+      return { XO("Drag one or more label boundaries."), &arrowCursor };
+   else
+      return { XO("Drag label boundary."), &arrowCursor };
 }
 
 UIHandle::Result LabelGlyphHandle::Release

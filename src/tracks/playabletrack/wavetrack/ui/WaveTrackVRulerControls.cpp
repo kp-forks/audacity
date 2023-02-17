@@ -13,11 +13,11 @@ Paul Licameli split from TrackPanel.cpp
 
 #include "../../../../RefreshCode.h"
 #include "../../../../TrackPanelMouseEvent.h"
-#include "../../../../WaveTrack.h"
+#include "WaveTrack.h"
 
-#include "../../../../AColor.h"
-#include "../../../../AllThemeResources.h"
-#include "../../../../Theme.h"
+#include "AColor.h"
+#include "AllThemeResources.h"
+#include "Theme.h"
 #include "../../../../TrackArtist.h"
 #include "../../../../TrackPanelDrawingContext.h"
 #include "../../../../widgets/Ruler.h"

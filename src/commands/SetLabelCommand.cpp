@@ -19,11 +19,14 @@
 
 #include "SetLabelCommand.h"
 
+#include "CommandDispatch.h"
+#include "CommandManager.h"
+#include "../CommonCommandFlags.h"
 #include "LoadCommands.h"
-#include "../ViewInfo.h"
-#include "../WaveTrack.h"
+#include "ViewInfo.h"
+#include "WaveTrack.h"
 #include "../LabelTrack.h"
-#include "../ProjectHistory.h"
+#include "ProjectHistory.h"
 #include "../Shuttle.h"
 #include "../ShuttleGui.h"
 #include "CommandContext.h"
@@ -38,15 +41,21 @@ SetLabelCommand::SetLabelCommand()
 {
 }
 
-
-bool SetLabelCommand::DefineParams( ShuttleParams & S ){ 
-   S.Define(    mLabelIndex,                            wxT("Label"), 0, 0, 100 );
-   S.OptionalY( bHasText       ).Define(  mText,        wxT("Text"),       wxT("empty") );
+template<bool Const>
+bool SetLabelCommand::VisitSettings( SettingsVisitorBase<Const> & S ){
+   S.Define(    mLabelIndex,                            wxT("Label"), 0, 0, 10000 );
+   S.OptionalY( bHasText       ).Define(  mText,        wxT("Text"),       wxString{"empty"} );
    S.OptionalY( bHasT0         ).Define(  mT0,          wxT("Start"),      0.0, 0.0, 100000.0);
    S.OptionalY( bHasT1         ).Define(  mT1,          wxT("End"),        0.0, 0.0, 100000.0);
    S.OptionalN( bHasSelected   ).Define(  mbSelected,   wxT("Selected"),   false );
    return true;
 };
+
+bool SetLabelCommand::VisitSettings( SettingsVisitor & S )
+   { return VisitSettings<false>(S); }
+
+bool SetLabelCommand::VisitSettings( ConstSettingsVisitor & S )
+   { return VisitSettings<true>(S); }
 
 void SetLabelCommand::PopulateOrExchange(ShuttleGui & S)
 {
@@ -129,4 +138,20 @@ bool SetLabelCommand::Apply(const CommandContext & context)
       XO("Edited Label"), XO("Label"));
 
    return true;
+}
+
+namespace {
+using namespace MenuTable;
+
+// Register menu items
+
+AttachedItem sAttachment1{
+   wxT("Optional/Extra/Part2/Scriptables1"),
+   // Note that the PLUGIN_SYMBOL must have a space between words,
+   // whereas the short-form used here must not.
+   // (So if you did write "Compare Audio" for the PLUGIN_SYMBOL name, then
+   // you would have to use "CompareAudio" here.)
+   Command( wxT("SetLabel"), XXO("Set Label..."),
+      CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag() )
+};
 }

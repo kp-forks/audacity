@@ -11,9 +11,9 @@ Paul Licameli split from Import.cpp
 #include "ImportPlugin.h"
 
 #include <wx/filename.h>
-#include "../WaveTrack.h"
+#include "WaveTrack.h"
 #include "../widgets/ProgressDialog.h"
-#include "../prefs/QualitySettings.h"
+#include "QualitySettings.h"
 
 ImportPlugin::ImportPlugin(FileExtensions supportedExtensions):
    mExtensions( std::move( supportedExtensions ) )
@@ -69,5 +69,5 @@ sampleFormat ImportFileHandle::ChooseFormat(sampleFormat effectiveFormat)
 std::shared_ptr<WaveTrack> ImportFileHandle::NewWaveTrack(
    WaveTrackFactory &trackFactory, sampleFormat effectiveFormat, double rate)
 {
-   return trackFactory.NewWaveTrack(ChooseFormat(effectiveFormat), rate);
+   return trackFactory.Create(ChooseFormat(effectiveFormat), rate);
 }

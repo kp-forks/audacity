@@ -12,10 +12,6 @@ A copy of this license is included with this source.
 Based on ExportOGG.cpp by:
 Joshua Haberman
 
-Portions from vorbis-tools, copyright 2000-2002 Michael Smith
-<msmith@labyrinth.net.au>; Vorbize, Kenneth Arnold <kcarnold@yahoo.com>;
-and libvorbis examples, Monty <monty@xiph.org>
-
 **********************************************************************/
 
 
@@ -30,13 +26,13 @@ and libvorbis examples, Monty <monty@xiph.org>
 #include "FLAC++/encoder.h"
 
 #include "float_cast.h"
-#include "../ProjectSettings.h"
-#include "../Mix.h"
+#include "ProjectRate.h"
+#include "Mix.h"
 #include "Prefs.h"
 #include "../ShuttleGui.h"
 
-#include "../Tags.h"
-#include "../Track.h"
+#include "Tags.h"
+#include "Track.h"
 
 #include "../widgets/AudacityMessageBox.h"
 #include "../widgets/ProgressDialog.h"
@@ -213,7 +209,7 @@ public:
 
    void OptionsCreate(ShuttleGui &S, int format) override;
    ProgressResult Export(AudacityProject *project,
-               std::unique_ptr<ProgressDialog> &pDialog,
+               std::unique_ptr<BasicUI::ProgressDialog> &pDialog,
                unsigned channels,
                const wxFileNameWrapper &fName,
                bool selectedOnly,
@@ -245,7 +241,7 @@ ExportFLAC::ExportFLAC()
 }
 
 ProgressResult ExportFLAC::Export(AudacityProject *project,
-                        std::unique_ptr<ProgressDialog> &pDialog,
+                        std::unique_ptr<BasicUI::ProgressDialog> &pDialog,
                         unsigned numChannels,
                         const wxFileNameWrapper &fName,
                         bool selectionOnly,
@@ -255,8 +251,7 @@ ProgressResult ExportFLAC::Export(AudacityProject *project,
                         const Tags *metadata,
                         int WXUNUSED(subformat))
 {
-   const auto &settings = ProjectSettings::Get( *project );
-   double    rate    = settings.GetRate();
+   double    rate    = ProjectRate::Get(*project).GetRate();
    const auto &tracks = TrackList::Get( *project );
 
    wxLogNull logNo;            // temporarily disable wxWidgets error messages
@@ -385,21 +380,20 @@ ProgressResult ExportFLAC::Export(AudacityProject *project,
    auto &progress = *pDialog;
 
    while (updateResult == ProgressResult::Success) {
-      auto samplesThisRun = mixer->Process(SAMPLES_PER_RUN);
-      if (samplesThisRun == 0) { //stop encoding
+      auto samplesThisRun = mixer->Process();
+      if (samplesThisRun == 0) //stop encoding
          break;
-      }
       else {
          for (size_t i = 0; i < numChannels; i++) {
-            samplePtr mixed = mixer->GetBuffer(i);
+            auto mixed = mixer->GetBuffer(i);
             if (format == int24Sample) {
                for (decltype(samplesThisRun) j = 0; j < samplesThisRun; j++) {
-                  tmpsmplbuf[i][j] = ((int *)mixed)[j];
+                  tmpsmplbuf[i][j] = ((const int *)mixed)[j];
                }
             }
             else {
                for (decltype(samplesThisRun) j = 0; j < samplesThisRun; j++) {
-                  tmpsmplbuf[i][j] = ((short *)mixed)[j];
+                  tmpsmplbuf[i][j] = ((const short *)mixed)[j];
                }
             }
          }
@@ -413,7 +407,7 @@ ProgressResult ExportFLAC::Export(AudacityProject *project,
          }
          if (updateResult == ProgressResult::Success)
             updateResult =
-               progress.Update(mixer->MixGetCurrentTime() - t0, t1 - t0);
+               progress.Poll(mixer->MixGetCurrentTime() - t0, t1 - t0);
       }
    }
 
@@ -488,6 +482,36 @@ bool ExportFLAC::GetMetadata(AudacityProject *project, const Tags *tags)
 static Exporter::RegisteredExportPlugin sRegisteredPlugin{ "FLAC",
    []{ return std::make_unique< ExportFLAC >(); }
 };
+
+#ifdef HAS_CLOUD_UPLOAD
+#include "CloudExporterPlugin.h"
+#include "CloudExportersRegistry.h"
+
+class FlacCloudHelper : public cloud::CloudExporterPlugin
+{
+public:
+   wxString GetExporterID() const override
+   {
+      return "FLAC";
+   }
+
+   FileExtension GetFileExtension() const override
+   {
+      return "flac";
+   }
+
+   void OnBeforeExport() override
+   {
+      FLACBitDepth.Write("24");
+      FLACLevel.Write("5");
+   }
+
+}; // WavPackCloudHelper
+
+static bool cloudExporterRegisterd = cloud::RegisterCloudExporter(
+   "audio/x-flac",
+   [](const AudacityProject&) { return std::make_unique<FlacCloudHelper>(); });
+#endif
 
 #endif // USE_LIBFLAC
 

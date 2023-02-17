@@ -24,9 +24,10 @@ Paul Licameli split from AudacityProject.cpp
 #include "PlatformCompatibility.h"
 #include "Project.h"
 #include "ProjectFileIO.h"
-#include "ProjectFSCK.h"
 #include "ProjectHistory.h"
 #include "ProjectSelectionManager.h"
+#include "ProjectWindows.h"
+#include "ProjectRate.h"
 #include "ProjectSettings.h"
 #include "ProjectStatus.h"
 #include "ProjectWindow.h"
@@ -39,6 +40,7 @@ Paul Licameli split from AudacityProject.cpp
 #include "TrackPanel.h"
 #include "UndoManager.h"
 #include "WaveTrack.h"
+#include "WaveClip.h"
 #include "wxFileNameWrapper.h"
 #include "export/Export.h"
 #include "import/Import.h"
@@ -48,9 +50,12 @@ Paul Licameli split from AudacityProject.cpp
 #include "widgets/FileHistory.h"
 #include "widgets/UnwritableLocationErrorDialog.h"
 #include "widgets/Warning.h"
+#include "widgets/wxPanelWrapper.h"
 #include "XMLFileReader.h"
 
 #include "HelpText.h"
+
+#include <optional>
 
 static const AudacityProject::AttachedObjects::RegisteredFactory sFileManagerKey{
    []( AudacityProject &parent ){
@@ -202,7 +207,7 @@ auto ProjectFileManager::ReadProjectFile(
             err = true;
          }
 
-         err = ( !t->LinkConsistencyCheck() ) || err;
+         err = ( !t->LinkConsistencyFix() ) || err;
 
          mLastSavedTracks->Add(t->Duplicate());
       }
@@ -318,7 +323,7 @@ bool ProjectFileManager::DoSave(const FilePath & fileName, const bool fromSaveAs
    // End of confirmations
 
    // Always save a backup of the original project file
-   Optional<ProjectFileIO::BackupProject> pBackupProject;
+   std::optional<ProjectFileIO::BackupProject> pBackupProject;
    if (fromSaveAs && wxFileExists(fileName))
    {
       pBackupProject.emplace(projectFileIO, fileName);
@@ -1012,7 +1017,8 @@ AudacityProject *ProjectFileManager::OpenProjectFile(
       selectionManager.SSBL_SetBandwidthSelectionFormatName(
       settings.GetBandwidthSelectionFormatName());
 
-      SelectionBar::Get( project ).SetRate( settings.GetRate() );
+      SelectionBar::Get( project )
+         .SetRate( ProjectRate::Get(project).GetRate() );
 
       ProjectHistory::Get( project ).InitialState();
       TrackFocus::Get( project ).Set( *tracks.Any().begin() );
@@ -1128,22 +1134,26 @@ ProjectFileManager::AddImportedTracks(const FilePath &fileName,
 
       newTrack->SetSelected(true);
 
-      if ( useSuffix )
-         newTrack->SetName(trackNameBase + wxString::Format(wxT(" %d" ), i + 1));
+      
+      if (useSuffix)
+          //i18n-hint Name default name assigned to a clip on track import
+          newTrack->SetName(XC("%s %d", "clip name template").Format(trackNameBase, i + 1).Translation());
       else
-         newTrack->SetName(trackNameBase);
+          newTrack->SetName(trackNameBase);
 
-      newTrack->TypeSwitch( [&](WaveTrack *wt) {
+      newTrack->TypeSwitch([&](WaveTrack *wt) {
          if (newRate == 0)
             newRate = wt->GetRate();
+         auto trackName = wt->GetName();
+         for (auto& clip : wt->GetClips())
+            clip->SetName(trackName);
       });
    }
 
    // Automatically assign rate of imported file to whole project,
    // if this is the first file that is imported
    if (initiallyEmpty && newRate > 0) {
-      auto &settings = ProjectSettings::Get( project );
-      settings.SetRate( newRate );
+      ProjectRate::Get(project).SetRate( newRate );
       SelectionBar::Get( project ).SetRate( newRate );
    }
 

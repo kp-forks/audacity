@@ -20,12 +20,15 @@
 #include "SetEnvelopeCommand.h"
 
 #include "CommandContext.h"
+#include "CommandDispatch.h"
+#include "CommandManager.h"
+#include "../CommonCommandFlags.h"
 #include "LoadCommands.h"
-#include "../ProjectHistory.h"
-#include "../UndoManager.h"
-#include "../WaveClip.h"
-#include "../WaveTrack.h"
-#include "../Envelope.h"
+#include "ProjectHistory.h"
+#include "UndoManager.h"
+#include "WaveClip.h"
+#include "WaveTrack.h"
+#include "Envelope.h"
 #include "../Shuttle.h"
 #include "../ShuttleGui.h"
 
@@ -39,13 +42,19 @@ SetEnvelopeCommand::SetEnvelopeCommand()
 {
 }
 
-
-bool SetEnvelopeCommand::DefineParams( ShuttleParams & S ){ 
+template<bool Const>
+bool SetEnvelopeCommand::VisitSettings( SettingsVisitorBase<Const> & S ){
    S.OptionalY( bHasT              ).Define(  mT,              wxT("Time"),     0.0, 0.0, 100000.0);
    S.OptionalY( bHasV              ).Define(  mV,              wxT("Value"),    1.0, 0.0, 2.0);
    S.OptionalN( bHasDelete         ).Define(  mbDelete,        wxT("Delete"),   false );
    return true;
 };
+
+bool SetEnvelopeCommand::VisitSettings( SettingsVisitor & S )
+   { return VisitSettings<false>(S); }
+
+bool SetEnvelopeCommand::VisitSettings( ConstSettingsVisitor & S )
+   { return VisitSettings<true>(S); }
 
 void SetEnvelopeCommand::PopulateOrExchange(ShuttleGui & S)
 {
@@ -71,8 +80,8 @@ bool SetEnvelopeCommand::ApplyInner( const CommandContext &context, Track * t )
          WaveClip * pClip = *it;
          bool bFound =
             !bHasT || (
-               ( pClip->GetStartTime() <= mT) &&
-               ( pClip->GetEndTime() >= mT )
+               ( pClip->GetPlayStartTime() <= mT) &&
+               ( pClip->GetPlayEndTime() >= mT )
             );
          if( bFound )
          {
@@ -96,4 +105,20 @@ bool SetEnvelopeCommand::ApplyInner( const CommandContext &context, Track * t )
    } );
 
    return true;
+}
+
+namespace {
+using namespace MenuTable;
+
+// Register menu items
+
+AttachedItem sAttachment1{
+   wxT("Optional/Extra/Part2/Scriptables1"),
+   // Note that the PLUGIN_SYMBOL must have a space between words,
+   // whereas the short-form used here must not.
+   // (So if you did write "Compare Audio" for the PLUGIN_SYMBOL name, then
+   // you would have to use "CompareAudio" here.)
+   Command( wxT("SetEnvelope"), XXO("Set Envelope..."),
+      CommandDispatch::OnAudacityCommand, AudioIONotBusyFlag() )
+};
 }

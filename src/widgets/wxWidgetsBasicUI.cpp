@@ -8,6 +8,7 @@ Paul Licameli
 
 **********************************************************************/
 #include "wxWidgetsBasicUI.h"
+#include "wxWidgetsWindowPlacement.h"
 #include "MemoryX.h" // for Destroy_ptr
 #include "widgets/ErrorDialog.h"
 #ifdef HAS_SENTRY_REPORTING
@@ -15,13 +16,13 @@ Paul Licameli
 #endif
 #include "widgets/AudacityMessageBox.h"
 #include "ProgressDialog.h"
+#include "MultiDialog.h"
 #include <wx/app.h>
 #include <wx/progdlg.h>
 #include <wx/windowptr.h>
+#include <wx/utils.h>
 
 using namespace BasicUI;
-
-wxWidgetsWindowPlacement::~wxWidgetsWindowPlacement() = default;
 
 wxWidgetsBasicUI::~wxWidgetsBasicUI() = default;
 
@@ -35,16 +36,6 @@ void wxWidgetsBasicUI::DoYield()
    wxTheApp->Yield();
 }
 
-namespace {
-wxWindow *GetParent(const BasicUI::WindowPlacement &placement)
-{
-   if (auto *pPlacement =
-       dynamic_cast<const wxWidgetsWindowPlacement*>(&placement))
-      return pPlacement->pWindow;
-   return nullptr;
-}
-}
-
 void wxWidgetsBasicUI::DoShowErrorDialog(
    const BasicUI::WindowPlacement &placement,
    const TranslatableString &dlogTitle,
@@ -54,7 +45,7 @@ void wxWidgetsBasicUI::DoShowErrorDialog(
 {
    using namespace BasicUI;
    bool modal = true;
-   auto parent = GetParent(placement);
+   auto parent = wxWidgetsWindowPlacement::GetParent(placement);
    switch (options.type) {
       case ErrorDialogType::ModalErrorReport: {
 #ifdef HAS_SENTRY_REPORTING
@@ -141,7 +132,9 @@ wxWidgetsBasicUI::DoMessageBox(
    // This calls through to ::wxMessageBox:
    auto wxResult =
       ::AudacityMessageBox(message, options.caption, style,
-         options.parent ? GetParent(*options.parent) : nullptr);
+         options.parent
+           ? wxWidgetsWindowPlacement::GetParent(*options.parent)
+           : nullptr);
    // This switch exhausts all possibilities for the return from::wxMessageBox.
    // see utilscmn.cpp in wxWidgets.
    // Remap to our toolkit-neutral enumeration.
@@ -162,26 +155,6 @@ wxWidgetsBasicUI::DoMessageBox(
    }
 }
 
-namespace {
-struct MyProgressDialog : BasicUI::ProgressDialog {
-   wxWindowPtr<::ProgressDialog> mpDialog;
-
-   explicit MyProgressDialog(::ProgressDialog *pDialog)
-   : mpDialog{ pDialog }
-   {
-      wxASSERT(pDialog);
-   }
-   ~MyProgressDialog() override = default;
-   ProgressResult Poll(
-      unsigned long long numerator,
-      unsigned long long denominator,
-      const TranslatableString &message) override
-   {
-      return mpDialog->Update(numerator, denominator, message);
-   }
-};
-}
-
 std::unique_ptr<BasicUI::ProgressDialog>
 wxWidgetsBasicUI::DoMakeProgress(const TranslatableString & title,
    const TranslatableString &message,
@@ -189,39 +162,36 @@ wxWidgetsBasicUI::DoMakeProgress(const TranslatableString & title,
    const TranslatableString &remainingLabelText)
 {
    unsigned options = 0;
-   if (~(flags & ProgressShowStop))
+   if (!(flags & ProgressShowStop))
       options |= pdlgHideStopButton;
-   if (~(flags & ProgressShowCancel))
+   if (!(flags & ProgressShowCancel))
       options |= pdlgHideCancelButton;
    if ((flags & ProgressHideTime))
       options |= pdlgHideElapsedTime;
    if ((flags & ProgressConfirmStopOrCancel))
       options |= pdlgConfirmStopCancel;
-   // Note that wxWindow objects should not be managed by std::unique_ptr
+   // Usually wxWindow objects should not be managed by std::unique_ptr
    // See https://docs.wxwidgets.org/3.0/overview_windowdeletion.html
-   // So there is an extra indirection:  return a deletable object that holds
-   // the proper kind of smart pointer to a wxWindow.
-   return std::make_unique<MyProgressDialog>(
-      safenew ::ProgressDialog(
-         title, message, options, remainingLabelText));
+   // But on macOS the use of wxWindowPtr for the progress dialog sometimes
+   // causes hangs.
+   return std::make_unique<::ProgressDialog>(
+      title, message, options, remainingLabelText);
 }
 
 namespace {
-struct MyGenericProgress : GenericProgressDialog {
-   wxWindowPtr<wxGenericProgressDialog> mpDialog;
-
+struct MyGenericProgress : wxGenericProgressDialog, GenericProgressDialog {
    MyGenericProgress(const TranslatableString &title,
       const TranslatableString &message,
       wxWindow *parent = nullptr)
-      : mpDialog{ safenew wxGenericProgressDialog(
+      : wxGenericProgressDialog{
          title.Translation(), message.Translation(),
          300000,     // range
          parent,
          wxPD_APP_MODAL | wxPD_ELAPSED_TIME | wxPD_SMOOTH
-      ) }
+      }
    {}
    ~MyGenericProgress() override = default;
-   void Pulse() override { mpDialog->Pulse(); }
+   void Pulse() override { wxGenericProgressDialog::Pulse(); }
 };
 }
 
@@ -232,5 +202,30 @@ wxWidgetsBasicUI::DoMakeGenericProgress(
    const TranslatableString &message)
 {
    return std::make_unique<MyGenericProgress>(
-      title, message, GetParent(placement));
+      title, message, wxWidgetsWindowPlacement::GetParent(placement));
+}
+
+int wxWidgetsBasicUI::DoMultiDialog(const TranslatableString &message,
+   const TranslatableString &title,
+   const TranslatableStrings &buttons,
+   const ManualPageID &helpPage,
+   const TranslatableString &boxMsg, bool log)
+{
+   return ::ShowMultiDialog(message, title, buttons, helpPage, boxMsg, log);
+}
+
+bool wxWidgetsBasicUI::DoOpenInDefaultBrowser(const wxString &url)
+{
+   return wxLaunchDefaultBrowser(url);
+}
+
+std::unique_ptr<BasicUI::WindowPlacement> wxWidgetsBasicUI::DoFindFocus()
+{
+   return std::make_unique<wxWidgetsWindowPlacement>(wxWindow::FindFocus());
+}
+
+void wxWidgetsBasicUI::DoSetFocus(const BasicUI::WindowPlacement &focus)
+{
+   auto pWindow = wxWidgetsWindowPlacement::GetParent(focus);
+   pWindow->SetFocus();
 }
